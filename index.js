@@ -1,8 +1,5 @@
 const TelegramBot = require('node-telegram-bot-api');
-const OpenAI = require('openai');
 const express = require('express');
-const https = require('https');
-const http = require('http');
 require('dotenv').config();
 
 // ========== КОНФИГУРАЦИЯ ==========
@@ -13,26 +10,7 @@ const appUrl = process.env.RENDER_EXTERNAL_URL || `http://localhost:${port}`;
 
 if (!token) {
   console.error('❌ Ошибка: TELEGRAM_BOT_TOKEN не установлен');
-  console.error('Создайте бота через @BotFather и добавьте токен в переменные окружения Render');
-  process.exit(1);
-}
-
-// ========== ИНИЦИАЛИЗАЦИЯ БОТА ==========
-let bot;
-try {
-  if (process.env.NODE_ENV === 'production') {
-    // В продакшене используем вебхуки
-    bot = new TelegramBot(token);
-    const webhookUrl = `${appUrl}/bot${token}`;
-    bot.setWebHook(webhookUrl);
-    console.log(`🌐 Вебхук установлен: ${webhookUrl}`);
-  } else {
-    // В разработке используем polling
-    bot = new TelegramBot(token, { polling: true });
-    console.log('🔧 Режим разработки: polling');
-  }
-} catch (error) {
-  console.error('❌ Ошибка инициализации бота:', error.message);
+  console.error('Создайте бота через @BotFather');
   process.exit(1);
 }
 
@@ -40,16 +18,30 @@ try {
 let openai;
 if (openaiApiKey) {
   try {
+    // Динамический импорт для избежания ошибок если модуль не установлен
+    const { default: OpenAI } = await import('openai');
     openai = new OpenAI({ 
       apiKey: openaiApiKey,
-      timeout: 30000 // 30 секунд таймаут
+      timeout: 30000
     });
     console.log('✅ Нейросеть OpenAI подключена');
   } catch (error) {
     console.log('⚠️  OpenAI не подключен:', error.message);
+    openai = null;
   }
 } else {
   console.log('ℹ️  OpenAI API ключ не найден. Используется локальная база');
+  openai = null;
+}
+
+// ========== ИНИЦИАЛИЗАЦИЯ БОТА ==========
+let bot;
+try {
+  bot = new TelegramBot(token, { polling: true });
+  console.log('🤖 Бот инициализирован');
+} catch (error) {
+  console.error('❌ Ошибка инициализации бота:', error.message);
+  process.exit(1);
 }
 
 // ========== БАЗА ДАННЫХ ==========
@@ -78,134 +70,180 @@ const foodDatabase = {
   'чай': { calories: 1, protein: 0, fat: 0, carbs: 0.2 },
 };
 
-// ========== ИНИЦИАЛИЗАЦИЯ EXPRESS ==========
+// ========== ФУНКЦИИ AI ==========
+async function askAI(foodText) {
+  if (!openai) return null;
+  
+  try {
+    const prompt = `Пользователь съел: "${foodText}". Оцени калории в ккал. Ответь только числом.`;
+    
+    const completion = await openai.chat.completions.create({
+      model: "gpt-3.5-turbo",
+      messages: [{ role: "user", content: prompt }],
+      temperature: 0.3,
+      max_tokens: 50
+    });
+
+    const response = completion.choices[0].message.content.trim();
+    const calories = parseInt(response.replace(/[^\d]/g, ''));
+    
+    if (!isNaN(calories) && calories > 0) {
+      return calories;
+    }
+    return null;
+  } catch (error) {
+    console.error('Ошибка AI:', error.message);
+    return null;
+  }
+}
+
+async function analyzeFoodInput(text) {
+  const lowerText = text.toLowerCase().trim();
+  
+  // Сначала ищем в локальной базе
+  for (const [foodName, nutrition] of Object.entries(foodDatabase)) {
+    if (lowerText.includes(foodName.toLowerCase())) {
+      const match = text.match(/(\d+)\s*(г|грамм|мл)/i);
+      const quantity = match ? parseInt(match[1]) : 100;
+      const calories = Math.round((nutrition.calories * quantity) / 100);
+      
+      return {
+        foodName: foodName.charAt(0).toUpperCase() + foodName.slice(1),
+        quantity: quantity,
+        calories: calories,
+        protein: Math.round((nutrition.protein * quantity) / 100 * 10) / 10,
+        fat: Math.round((nutrition.fat * quantity) / 100 * 10) / 10,
+        carbs: Math.round((nutrition.carbs * quantity) / 100 * 10) / 10,
+        source: 'база'
+      };
+    }
+  }
+  
+  // Если не нашли в базе, пробуем AI
+  if (openai) {
+    try {
+      const aiCalories = await askAI(text);
+      if (aiCalories) {
+        return {
+          foodName: text.substring(0, 30),
+          quantity: 100, // предполагаем 100г
+          calories: aiCalories,
+          protein: 0,
+          fat: 0,
+          carbs: 0,
+          source: 'ИИ'
+        };
+      }
+    } catch (error) {
+      console.log('AI не сработал, используем оценку');
+    }
+  }
+  
+  // Если ничего не помогло, используем оценку
+  const match = text.match(/(\d+)/);
+  const quantity = match ? parseInt(match[1]) : 100;
+  const estimatedCalories = Math.round(quantity * 1.5); // 1.5 ккал/г в среднем
+  
+  return {
+    foodName: text.substring(0, 30),
+    quantity: quantity,
+    calories: estimatedCalories,
+    protein: Math.round(quantity * 0.1),
+    fat: Math.round(quantity * 0.08),
+    carbs: Math.round(quantity * 0.2),
+    source: 'оценка'
+  };
+}
+
+// ========== EXPRESS СЕРВЕР ==========
 const app = express();
-
-// Middleware
 app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
 
-// Логирование запросов
-app.use((req, res, next) => {
-  console.log(`${new Date().toISOString()} ${req.method} ${req.url}`);
-  next();
-});
-
-// Health check endpoint (обязательно для Render)
+// Health check
 app.get('/health', (req, res) => {
-  res.status(200).json({ 
+  res.json({ 
     status: 'ok',
-    bot: 'running',
+    service: 'calorie-bot',
     timestamp: new Date().toISOString(),
-    uptime: process.uptime(),
-    memory: process.memoryUsage(),
     users: userData.size
   });
 });
 
-// Статусная страница
-app.get('/status', (req, res) => {
-  res.json({
-    service: 'Calorie Counter Bot',
-    version: '2.0.0',
-    environment: process.env.NODE_ENV || 'development',
-    stats: {
-      users: userData.size,
-      active: Array.from(userData.values()).filter(u => u.consumed > 0).length,
-      foodItems: Object.keys(foodDatabase).length
-    }
-  });
-});
-
-// Главная страница
+// Статус
 app.get('/', (req, res) => {
   res.send(`
-    <!DOCTYPE html>
     <html>
-    <head>
-      <title>Calorie Counter Bot</title>
-      <meta name="viewport" content="width=device-width, initial-scale=1">
-      <style>
-        body { font-family: Arial, sans-serif; text-align: center; padding: 50px; }
-        .container { max-width: 600px; margin: 0 auto; }
-        .status { background: #f0f0f0; padding: 20px; border-radius: 10px; margin: 20px 0; }
-        .green { color: green; }
-      </style>
-    </head>
-    <body>
-      <div class="container">
+      <head><title>Calorie Bot</title></head>
+      <body>
         <h1>🍎 Calorie Counter Bot</h1>
-        <div class="status">
-          <h2>✅ Сервер работает</h2>
-          <p>Активных пользователей: ${userData.size}</p>
-          <p>Продуктов в базе: ${Object.keys(foodDatabase).length}</p>
-          <p>Время работы: ${Math.floor(process.uptime() / 60)} минут</p>
-        </div>
-        <p>Используйте Telegram для взаимодействия с ботом.</p>
-      </div>
-    </body>
+        <p>Status: ✅ Running</p>
+        <p>Users: ${userData.size}</p>
+        <p>AI: ${openai ? 'Enabled' : 'Disabled'}</p>
+      </body>
     </html>
   `);
 });
 
-// Вебхук для Telegram (только в продакшене)
-if (process.env.NODE_ENV === 'production') {
-  app.post(`/bot${token}`, (req, res) => {
-    bot.processUpdate(req.body);
-    res.sendStatus(200);
-  });
-}
+// ========== КОМАНДЫ БОТА ==========
 
-// ========== ФУНКЦИИ БОТА ==========
-
-// /start
 bot.onText(/\/start/, (msg) => {
   const chatId = msg.chat.id;
+  const name = msg.from.first_name;
+  
   const welcome = `
-🍎 *Calorie Counter Bot* 🍏
+🍎 *Привет, ${name}!*
 
 Я помогу считать калории!
 
 *Команды:*
-/setgoal - Установить норму калорий
+/setgoal - Установить дневную норму
 /add - Добавить еду
 /today - Статистика за день
 /clear - Сбросить данные
 /help - Помощь
 
+*Пример добавления еды:*
+"200г риса с курицей"
+"2 яйца и кофе"
+"Яблоко 150г"
+
 Начните с /setgoal
   `;
+  
   bot.sendMessage(chatId, welcome, { parse_mode: 'Markdown' });
 });
 
-// /help
 bot.onText(/\/help/, (msg) => {
   const chatId = msg.chat.id;
   const help = `
-*Помощь:*
+*📖 Помощь*
 
-1. /setgoal - установите дневную норму
-2. /add - добавьте съеденную еду
-3. /today - посмотрите статистику
+1. Установите норму: /setgoal
+2. Добавляйте еду: /add
+3. Следите: /today
 
-Примеры:
-• "200г риса с курицей"
-• "2 яйца и кофе"
-• "Яблоко 150г"
+*📝 Формат:*
+• Указывайте количество: "200г", "2 шт"
+• Можно несколько продуктов
+• ИИ поможет с сложными блюдами
+
+*🔧 Технически:*
+• База: ${Object.keys(foodDatabase).length} продуктов
+• ИИ: ${openai ? 'Включен' : 'Выключен'}
   `;
+  
   bot.sendMessage(chatId, help, { parse_mode: 'Markdown' });
 });
 
-// /setgoal
 bot.onText(/\/setgoal/, (msg) => {
   const chatId = msg.chat.id;
-  bot.sendMessage(chatId, 'Введите дневную норму калорий:');
+  bot.sendMessage(chatId, '🎯 Введите дневную норму калорий:');
   
   const user = userData.get(chatId) || {};
-  userData.set(chatId, { ...user, waitingFor: 'goal' });
+  user.waitingFor = 'goal';
+  userData.set(chatId, user);
 });
 
-// /add
 bot.onText(/\/add/, (msg) => {
   const chatId = msg.chat.id;
   const user = userData.get(chatId);
@@ -215,11 +253,11 @@ bot.onText(/\/add/, (msg) => {
     return;
   }
   
-  bot.sendMessage(chatId, 'Что вы съели? Опишите:');
-  userData.set(chatId, { ...user, waitingFor: 'food' });
+  bot.sendMessage(chatId, '🍽️ Что вы съели? Опишите:');
+  user.waitingFor = 'food';
+  userData.set(chatId, user);
 });
 
-// /today
 bot.onText(/\/today/, (msg) => {
   const chatId = msg.chat.id;
   const user = userData.get(chatId);
@@ -230,22 +268,34 @@ bot.onText(/\/today/, (msg) => {
   }
   
   const consumed = user.consumed || 0;
+  const foods = user.foods || [];
   const remaining = Math.max(0, user.dailyGoal - consumed);
   const percent = Math.round((consumed / user.dailyGoal) * 100);
   
-  const message = `
-📊 *Статистика*
-
-🎯 Норма: ${user.dailyGoal} ккал
-🍽️ Съедено: ${consumed} ккал
-✅ Осталось: ${remaining} ккал
-📈 ${percent}% выполнено
-  `;
+  let message = `📊 *Статистика за день*\n\n`;
+  message += `🎯 Норма: ${user.dailyGoal} ккал\n`;
+  message += `🍽️ Съедено: ${consumed} ккал\n`;
+  message += `✅ Осталось: ${remaining} ккал\n`;
+  message += `📈 ${percent}% выполнено\n\n`;
+  
+  if (foods.length > 0) {
+    message += '*Съедено:*\n';
+    foods.forEach((food, i) => {
+      message += `${i+1}. ${food.name} - ${food.calories} ккал\n`;
+    });
+  } else {
+    message += 'Еще ничего не съедено. Добавьте: /add';
+  }
+  
+  // Прогресс бар
+  const barLength = 10;
+  const filled = Math.min(barLength, Math.floor(percent / 10));
+  const bar = '█'.repeat(filled) + '░'.repeat(barLength - filled);
+  message += `\n${bar}`;
   
   bot.sendMessage(chatId, message, { parse_mode: 'Markdown' });
 });
 
-// /clear
 bot.onText(/\/clear/, (msg) => {
   const chatId = msg.chat.id;
   const user = userData.get(chatId);
@@ -256,23 +306,26 @@ bot.onText(/\/clear/, (msg) => {
     userData.set(chatId, user);
   }
   
-  bot.sendMessage(chatId, '✅ Данные очищены!');
+  bot.sendMessage(chatId, '✅ Данные за день очищены!');
 });
 
 // Обработка сообщений
 bot.on('message', async (msg) => {
   const chatId = msg.chat.id;
   const text = msg.text;
+  const userId = msg.from.id;
   
   if (text.startsWith('/')) return;
   
-  const user = userData.get(chatId) || {};
+  let user = userData.get(chatId) || {};
+  user.userId = userId;
+  user.lastActive = new Date().toISOString();
   
   if (user.waitingFor === 'goal') {
     const goal = parseInt(text);
     
-    if (isNaN(goal) || goal <= 0) {
-      bot.sendMessage(chatId, 'Ошибка! Введите число больше 0');
+    if (isNaN(goal) || goal <= 0 || goal > 10000) {
+      bot.sendMessage(chatId, '❌ Введите число от 100 до 10000');
       return;
     }
     
@@ -283,115 +336,155 @@ bot.on('message', async (msg) => {
     
     userData.set(chatId, user);
     
-    bot.sendMessage(chatId, `✅ Норма установлена: ${goal} ккал\nТеперь добавляйте еду: /add`);
+    bot.sendMessage(chatId, 
+      `✅ Норма установлена: *${goal} ккал*\n\n` +
+      `Теперь добавляйте еду командой /add\n` +
+      `Или просто напишите что съели!`,
+      { parse_mode: 'Markdown' }
+    );
     
-  } else if (user.waitingFor === 'food') {
-    // Простая обработка еды
-    let calories = 0;
-    let foodName = text;
+  } else if (user.waitingFor === 'food' || (!user.waitingFor && user.dailyGoal)) {
     
-    // Пытаемся найти продукт в базе
-    for (const [name, data] of Object.entries(foodDatabase)) {
-      if (text.toLowerCase().includes(name.toLowerCase())) {
-        const match = text.match(/(\d+)\s*(г|грамм|мл)/i);
-        const quantity = match ? parseInt(match[1]) : 100;
-        calories = Math.round((data.calories * quantity) / 100);
-        foodName = name;
-        break;
+    if (!text || text.length < 2) {
+      bot.sendMessage(chatId, 'Пожалуйста, опишите что съели');
+      return;
+    }
+    
+    bot.sendChatAction(chatId, 'typing');
+    
+    try {
+      const analysis = await analyzeFoodInput(text);
+      
+      if (!analysis) {
+        bot.sendMessage(chatId, 'Не удалось распознать. Попробуйте: "200г риса"');
+        return;
       }
+      
+      // Сохраняем
+      user.consumed = (user.consumed || 0) + analysis.calories;
+      user.foods = user.foods || [];
+      user.foods.push({
+        name: analysis.foodName,
+        calories: analysis.calories,
+        time: new Date().toLocaleTimeString('ru-RU')
+      });
+      user.waitingFor = null;
+      
+      userData.set(chatId, user);
+      
+      // Отправляем результат
+      const remaining = Math.max(0, user.dailyGoal - user.consumed);
+      const percent = Math.round((user.consumed / user.dailyGoal) * 100);
+      
+      let response = `✅ *Добавлено!*\n\n`;
+      response += `🍽️ ${analysis.foodName}\n`;
+      response += `📏 ${analysis.quantity}г\n`;
+      response += `🔥 ${analysis.calories} ккал\n\n`;
+      
+      if (analysis.protein > 0) {
+        response += `🥩 Белки: ${analysis.protein}g\n`;
+        response += `🥑 Жиры: ${analysis.fat}g\n`;
+        response += `🍚 Углеводы: ${analysis.carbs}g\n\n`;
+      }
+      
+      response += `📊 Итого: ${user.consumed}/${user.dailyGoal} ккал\n`;
+      response += `✅ Осталось: ${remaining} ккал\n`;
+      response += `📈 ${percent}% выполнено`;
+      
+      if (analysis.source === 'ИИ') {
+        response += `\n\n🤖 *Определено ИИ*`;
+      } else if (analysis.source === 'оценка') {
+        response += `\n\n📝 *Примерная оценка*`;
+      }
+      
+      bot.sendMessage(chatId, response, { parse_mode: 'Markdown' });
+      
+    } catch (error) {
+      console.error('Ошибка обработки:', error);
+      bot.sendMessage(chatId, '❌ Ошибка. Попробуйте еще раз');
     }
     
-    if (calories === 0) {
-      // Если не нашли, используем среднее значение
-      const match = text.match(/(\d+)/);
-      const quantity = match ? parseInt(match[1]) : 100;
-      calories = Math.round(quantity * 1.5); // Примерно 1.5 ккал/г
+  } else {
+    // Первое сообщение
+    if (!user.dailyGoal) {
+      bot.sendMessage(chatId, 
+        `👋 Привет! Я бот для подсчета калорий.\n\n` +
+        `Начните с установки дневной нормы:\n` +
+        `/setgoal`
+      );
+    } else {
+      bot.sendMessage(chatId, 
+        `Используйте /add чтобы добавить еду\n` +
+        `Или /today чтобы посмотреть статистику`
+      );
     }
-    
-    user.consumed = (user.consumed || 0) + calories;
-    user.waitingFor = null;
-    user.foods = user.foods || [];
-    user.foods.push({ name: foodName, calories, time: new Date().toLocaleTimeString() });
     
     userData.set(chatId, user);
-    
-    const remaining = Math.max(0, user.dailyGoal - user.consumed);
-    bot.sendMessage(chatId, 
-      `✅ Добавлено: ${foodName} - ${calories} ккал\n` +
-      `📊 Всего: ${user.consumed}/${user.dailyGoal} ккал\n` +
-      `✅ Осталось: ${remaining} ккал`
-    );
-  } else if (user.dailyGoal) {
-    bot.sendMessage(chatId, 'Используйте /add чтобы добавить еду');
-  } else {
-    bot.sendMessage(chatId, 'Начните с команды /setgoal');
   }
 });
 
 // ========== KEEP ALIVE ==========
-class KeepAlive {
-  constructor(url, interval = 5 * 60 * 1000) {
-    this.url = url;
-    this.interval = interval;
-    this.timer = null;
-    this.count = 0;
-  }
+function startKeepAlive() {
+  const keepAliveUrl = appUrl;
+  let pingCount = 0;
   
-  start() {
-    console.log(`🔄 KeepAlive запущен для ${this.url}`);
-    this.ping();
-    this.timer = setInterval(() => this.ping(), this.interval);
-  }
-  
-  async ping() {
-    this.count++;
+  async function ping() {
+    pingCount++;
     try {
-      const response = await fetch(`${this.url}/health`);
+      const response = await fetch(`${keepAliveUrl}/health`);
       const data = await response.json();
-      console.log(`✅ KeepAlive #${this.count}: ${response.status}`);
+      console.log(`🔄 KeepAlive #${pingCount}: ${response.status}`);
       return data;
     } catch (error) {
-      console.log(`⚠️  KeepAlive #${this.count}: ${error.message}`);
+      console.log(`⚠️  KeepAlive #${pingCount}: ${error.message}`);
       return null;
     }
   }
   
-  stop() {
-    if (this.timer) {
-      clearInterval(this.timer);
-      this.timer = null;
-    }
-    console.log('🛑 KeepAlive остановлен');
-  }
+  console.log(`🔄 KeepAlive запущен для ${keepAliveUrl}`);
+  
+  // Первый пинг сразу
+  ping();
+  
+  // Затем каждые 5 минут
+  setInterval(ping, 5 * 60 * 1000);
+  
+  // Дополнительные пинги в начале
+  setTimeout(ping, 30000);
+  setTimeout(ping, 60000);
 }
 
-// ========== ЗАПУСК СЕРВЕРА ==========
-const server = app.listen(port, '0.0.0.0', () => {
-  console.log(`🚀 Сервер запущен на порту ${port}`);
-  console.log(`🌐 URL: ${appUrl}`);
-  console.log(`🤖 Бот: ${bot ? 'активен' : 'не активен'}`);
-  console.log(`🍎 Продуктов в базе: ${Object.keys(foodDatabase).length}`);
+// ========== ЗАПУСК ==========
+const server = app.listen(port, () => {
+  console.log(`
+╔════════════════════════════════════════╗
+║        🍎 CALORIE BOT v2.0 🍏         ║
+╠════════════════════════════════════════╣
+║ Статус:    ✅ Запущен                 ║
+║ Порт:      ${port}                    ║
+║ Пользователи: ${userData.size}        ║
+║ Продукты:  ${Object.keys(foodDatabase).length} ║
+║ ИИ:        ${openai ? '✅' : '❌'}    ║
+╚════════════════════════════════════════╝
+  `);
   
   // Запускаем KeepAlive
-  if (process.env.NODE_ENV === 'production') {
-    const keepAlive = new KeepAlive(appUrl);
-    keepAlive.start();
-  }
+  startKeepAlive();
 });
 
 // Graceful shutdown
 process.on('SIGTERM', () => {
-  console.log('🛑 Получен SIGTERM, завершаем работу...');
+  console.log('🛑 Завершаем работу...');
   server.close(() => {
-    console.log('✅ HTTP сервер остановлен');
+    console.log('✅ Сервер остановлен');
     process.exit(0);
   });
 });
 
 process.on('SIGINT', () => {
-  console.log('🛑 Получен SIGINT, завершаем работу...');
+  console.log('🛑 Ctrl+C - завершаем работу...');
   server.close(() => {
-    console.log('✅ HTTP сервер остановлен');
+    console.log('✅ Сервер остановлен');
     process.exit(0);
   });
 });
