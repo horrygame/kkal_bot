@@ -1,6 +1,12 @@
-const TelegramBot = require('node-telegram-bot-api');
-const express = require('express');
-require('dotenv').config();
+import TelegramBot from 'node-telegram-bot-api';
+import express from 'express';
+import dotenv from 'dotenv';
+import { createRequire } from 'module';
+
+dotenv.config();
+
+// Для совместимости с require внутри ES модуля
+const require = createRequire(import.meta.url);
 
 // ========== КОНФИГУРАЦИЯ ==========
 const token = process.env.TELEGRAM_BOT_TOKEN;
@@ -15,10 +21,10 @@ if (!token) {
 }
 
 // ========== ИНИЦИАЛИЗАЦИЯ OPENAI ==========
-let openai;
+let openai = null;
 if (openaiApiKey) {
   try {
-    // Динамический импорт для избежания ошибок если модуль не установлен
+    // Динамический импорт OpenAI
     const { default: OpenAI } = await import('openai');
     openai = new OpenAI({ 
       apiKey: openaiApiKey,
@@ -126,7 +132,7 @@ async function analyzeFoodInput(text) {
       if (aiCalories) {
         return {
           foodName: text.substring(0, 30),
-          quantity: 100, // предполагаем 100г
+          quantity: 100,
           calories: aiCalories,
           protein: 0,
           fat: 0,
@@ -142,7 +148,7 @@ async function analyzeFoodInput(text) {
   // Если ничего не помогло, используем оценку
   const match = text.match(/(\d+)/);
   const quantity = match ? parseInt(match[1]) : 100;
-  const estimatedCalories = Math.round(quantity * 1.5); // 1.5 ккал/г в среднем
+  const estimatedCalories = Math.round(quantity * 1.5);
   
   return {
     foodName: text.substring(0, 30),
@@ -165,21 +171,112 @@ app.get('/health', (req, res) => {
     status: 'ok',
     service: 'calorie-bot',
     timestamp: new Date().toISOString(),
-    users: userData.size
+    users: userData.size,
+    aiEnabled: !!openai
   });
 });
 
-// Статус
+// Главная страница
 app.get('/', (req, res) => {
   res.send(`
+    <!DOCTYPE html>
     <html>
-      <head><title>Calorie Bot</title></head>
-      <body>
-        <h1>🍎 Calorie Counter Bot</h1>
-        <p>Status: ✅ Running</p>
-        <p>Users: ${userData.size}</p>
-        <p>AI: ${openai ? 'Enabled' : 'Disabled'}</p>
-      </body>
+    <head>
+      <title>Calorie Counter Bot</title>
+      <meta name="viewport" content="width=device-width, initial-scale=1">
+      <style>
+        body { 
+          font-family: Arial, sans-serif; 
+          max-width: 800px; 
+          margin: 0 auto; 
+          padding: 20px;
+          background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+          min-height: 100vh;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+        }
+        .container {
+          background: white;
+          border-radius: 15px;
+          padding: 40px;
+          box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+          text-align: center;
+        }
+        h1 {
+          color: #333;
+          margin-bottom: 20px;
+        }
+        .emoji {
+          font-size: 3em;
+          margin-bottom: 20px;
+        }
+        .stats {
+          display: grid;
+          grid-template-columns: repeat(2, 1fr);
+          gap: 15px;
+          margin: 20px 0;
+        }
+        .stat-item {
+          background: #f8f9fa;
+          padding: 15px;
+          border-radius: 8px;
+        }
+        .stat-label {
+          color: #666;
+          font-size: 0.9em;
+        }
+        .stat-value {
+          font-size: 1.5em;
+          font-weight: bold;
+          color: #333;
+        }
+        .green { color: #38a169; }
+        .blue { color: #4299e1; }
+        .status-badge {
+          display: inline-block;
+          padding: 5px 15px;
+          border-radius: 20px;
+          font-weight: bold;
+          margin: 10px 0;
+        }
+        .status-running {
+          background: #c6f6d5;
+          color: #22543d;
+        }
+      </style>
+    </head>
+    <body>
+      <div class="container">
+        <div class="emoji">🍎🤖</div>
+        <h1>Calorie Counter Bot</h1>
+        
+        <div class="status-badge status-running">✅ Сервер работает</div>
+        
+        <div class="stats">
+          <div class="stat-item">
+            <div class="stat-label">Пользователей</div>
+            <div class="stat-value blue">${userData.size}</div>
+          </div>
+          <div class="stat-item">
+            <div class="stat-label">Продуктов в базе</div>
+            <div class="stat-value blue">${Object.keys(foodDatabase).length}</div>
+          </div>
+          <div class="stat-item">
+            <div class="stat-label">Искусственный интеллект</div>
+            <div class="stat-value ${openai ? 'green' : 'blue'}">${openai ? '✅ Включен' : '📚 Локальная база'}</div>
+          </div>
+          <div class="stat-item">
+            <div class="stat-label">Время работы</div>
+            <div class="stat-value">${Math.floor(process.uptime() / 60)} мин</div>
+          </div>
+        </div>
+        
+        <p style="margin-top: 30px; color: #666;">
+          Используйте Telegram для взаимодействия с ботом. Бот автоматически поддерживает активность.
+        </p>
+      </div>
+    </body>
     </html>
   `);
 });
@@ -229,7 +326,7 @@ bot.onText(/\/help/, (msg) => {
 
 *🔧 Технически:*
 • База: ${Object.keys(foodDatabase).length} продуктов
-• ИИ: ${openai ? 'Включен' : 'Выключен'}
+• ИИ: ${openai ? '✅ Включен' : '❌ Выключен'}
   `;
   
   bot.sendMessage(chatId, help, { parse_mode: 'Markdown' });
@@ -307,6 +404,17 @@ bot.onText(/\/clear/, (msg) => {
   }
   
   bot.sendMessage(chatId, '✅ Данные за день очищены!');
+});
+
+bot.onText(/\/keepalive/, (msg) => {
+  const chatId = msg.chat.id;
+  bot.sendMessage(chatId, 
+    `🔄 KeepAlive активен\n` +
+    `🌐 Сервер: ${appUrl}\n` +
+    `📊 Пинги: каждые 5 минут\n` +
+    `✅ Статус: работает`,
+    { parse_mode: 'Markdown' }
+  );
 });
 
 // Обработка сообщений
@@ -423,7 +531,7 @@ bot.on('message', async (msg) => {
   }
 });
 
-// ========== KEEP ALIVE ==========
+// ========== KEEP ALIVE ФУНКЦИЯ ==========
 function startKeepAlive() {
   const keepAliveUrl = appUrl;
   let pingCount = 0;
@@ -447,21 +555,31 @@ function startKeepAlive() {
   ping();
   
   // Затем каждые 5 минут
-  setInterval(ping, 5 * 60 * 1000);
+  const interval = setInterval(ping, 5 * 60 * 1000);
   
   // Дополнительные пинги в начале
   setTimeout(ping, 30000);
   setTimeout(ping, 60000);
+  
+  // Очистка при завершении
+  process.on('SIGTERM', () => {
+    clearInterval(interval);
+  });
+  
+  process.on('SIGINT', () => {
+    clearInterval(interval);
+  });
 }
 
-// ========== ЗАПУСК ==========
-const server = app.listen(port, () => {
+// ========== ЗАПУСК СЕРВЕРА ==========
+const server = app.listen(port, '0.0.0.0', () => {
   console.log(`
 ╔════════════════════════════════════════╗
 ║        🍎 CALORIE BOT v2.0 🍏         ║
 ╠════════════════════════════════════════╣
 ║ Статус:    ✅ Запущен                 ║
 ║ Порт:      ${port}                    ║
+║ URL:       ${appUrl}                  ║
 ║ Пользователи: ${userData.size}        ║
 ║ Продукты:  ${Object.keys(foodDatabase).length} ║
 ║ ИИ:        ${openai ? '✅' : '❌'}    ║
@@ -474,17 +592,20 @@ const server = app.listen(port, () => {
 
 // Graceful shutdown
 process.on('SIGTERM', () => {
-  console.log('🛑 Завершаем работу...');
+  console.log('🛑 Получен SIGTERM, завершаем работу...');
   server.close(() => {
-    console.log('✅ Сервер остановлен');
+    console.log('✅ HTTP сервер остановлен');
     process.exit(0);
   });
 });
 
 process.on('SIGINT', () => {
-  console.log('🛑 Ctrl+C - завершаем работу...');
+  console.log('🛑 Получен SIGINT (Ctrl+C), завершаем работу...');
   server.close(() => {
-    console.log('✅ Сервер остановлен');
+    console.log('✅ HTTP сервер остановлен');
     process.exit(0);
   });
 });
+
+// Экспорт для тестирования
+export { app, bot, userData, foodDatabase };
