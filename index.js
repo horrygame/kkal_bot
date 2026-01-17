@@ -2150,5 +2150,5 @@ process.on('SIGTERM', () => {
     process.exit(0);
   });
 });
-
-
+// Экспорт для Render
+export { app, bot };
