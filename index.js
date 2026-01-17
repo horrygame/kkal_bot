@@ -27,6 +27,11 @@ try {
   process.exit(1);
 }
 
+// ========== ХРАНИЛИЩЕ ДАННЫХ ==========
+const userData = new Map();          // Данные пользователей (норма, съеденное)
+const userStates = new Map();        // Состояния пользователей (текущий шаг)
+const pendingCorrections = new Map(); // Временные данные для подтверждения
+
 // ========== ИНИЦИАЛИЗАЦИЯ OPENAI ==========
 let openai = null;
 if (openaiApiKey) {
