@@ -2008,24 +2008,6 @@ bot.on('message', async (msg) => {
     return;
   }
   
-  // ========== ЕСЛИ НЕ РАСПОЗНАЛИ СОСТОЯНИЕ ==========
-  // Предлагаем начать с установки нормы
-  if (!user.dailyGoal) {
-    userStates.set(chatId, { step: 'waiting_for_goal' });
-    bot.sendMessage(chatId, 
-      '🎯 *Сначала установите дневную норму калорий:*\n\n' +
-      'Выберите вариант или введите свою норму:',
-      { parse_mode: 'Markdown', reply_markup: mainKeyboard }
-    );
-  } else {
-    // Возвращаем в главное меню
-    userStates.set(chatId, { step: 'main_menu' });
-    bot.sendMessage(chatId, 
-      'Что вы хотите сделать?',
-      { reply_markup: mainKeyboard }
-    );
-  }
-});
 
 // ========== KEEP ALIVE СИСТЕМА ==========
 function startKeepAlive() {
