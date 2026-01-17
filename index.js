@@ -922,8 +922,7 @@ const foodDatabase = {
   'помадка': { calories: 373, protein: 0.1, fat: 0.1, carbs: 93 }
 };
 };
-};
-};
+
 
 console.log(`📊 Загружено продуктов: ${Object.keys(foodDatabase).length}`);
 
