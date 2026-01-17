@@ -1160,10 +1160,16 @@ app.get('/', (req, res) => {
 // Обработчики команд бота
 // ========== ОСНОВНОЙ ОБРАБОТЧИК С ПРИВЕТСТВИЕМ И КЛАВИАТУРОЙ ==========
 
+// Хранилище состояний пользователей
 // ========== ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ И СОСТОЯНИЯ ==========
 
-// Состояния пользователей с улучшенной структурой
-const userStates = new Map(); // chatId -> {step, data, timestamp}
+// ========== ОСНОВНОЙ ОБРАБОТЧИК С ПРИВЕТСТВИЕМ И КЛАВИАТУРОЙ ==========
+
+// Хранилище состояний пользователей
+const userStates = new Map();
+
+// Хранилище временных данных для уточнения
+const pendingCorrections = new Map(); // Добавьте эту строку, если её нет
 
 // Основная клавиатура
 const mainKeyboard = {
@@ -1176,38 +1182,17 @@ const mainKeyboard = {
   one_time_keyboard: false
 };
 
-// Клавиатура для установки нормы
+// Клавиатура для ввода нормы
 const goalKeyboard = {
   keyboard: [
     ['1500 ккал (похудение)', '2000 ккал (поддержание)'],
-    ['2500 ккал (набор)', '✍️ Ввести свою норму']
+    ['2500 ккал (набор)', 'Ввести свою норму']
   ],
   resize_keyboard: true,
   one_time_keyboard: true
 };
 
-// Клавиатура для напоминания о граммовке
-const quantityReminderKeyboard = {
-  keyboard: [
-    ['✅ Продолжить с 100г', '✏️ Добавить граммовку'],
-    ['🔁 Переписать описание', '↩️ Отмена']
-  ],
-  resize_keyboard: true,
-  one_time_keyboard: true
-};
-
-// Клавиатура для подтверждения еды
-const confirmFoodKeyboard = {
-  keyboard: [
-    ['✅ Да, добавить', '✏️ Нет, изменить калории'],
-    ['🔍 Найти в базе', '↩️ Отмена']
-  ],
-  resize_keyboard: true,
-  one_time_keyboard: true
-};
-
-// ========== ОБРАБОТЧИК СТАРТА ==========
-
+// Приветственное сообщение при старте
 bot.onText(/\/start/, (msg) => {
   const chatId = msg.chat.id;
   const userName = msg.from.first_name;
@@ -1222,12 +1207,8 @@ bot.onText(/\/start/, (msg) => {
     `🎯 *Давайте начнем!*\n` +
     `Сначала установите вашу дневную норму калорий:`;
   
-  // Устанавливаем начальное состояние
-  userStates.set(chatId, { 
-    step: 'waiting_for_goal',
-    data: {},
-    timestamp: Date.now()
-  });
+  // Сохраняем состояние пользователя
+  userStates.set(chatId, { step: 'waiting_for_goal' });
   
   bot.sendMessage(chatId, welcomeMessage, {
     parse_mode: 'Markdown',
@@ -1235,1061 +1216,804 @@ bot.onText(/\/start/, (msg) => {
   });
 });
 
-// ========== ГЛАВНЫЙ ОБРАБОТЧИК СООБЩЕНИЙ ==========
-
+// Обработка всех текстовых сообщений
 bot.on('message', async (msg) => {
   const chatId = msg.chat.id;
   const text = msg.text;
   const userName = msg.from.first_name;
   
-  // Пропускаем команды (кроме /start который уже обработан)
+  // Пропускаем команды
   if (text.startsWith('/')) return;
   
-  // Получаем состояние пользователя
-  const userState = userStates.get(chatId) || { step: 'unknown' };
+  const userState = userStates.get(chatId) || {};
   const user = userData.get(chatId) || {};
   
-  console.log(`[${chatId}] Состояние: ${userState.step}, Текст: "${text}"`);
-  
-  // ========== ОБРАБОТКА ПО СОСТОЯНИЯМ ==========
-  
-  switch (userState.step) {
+  // ========== ШАГ 1: УСТАНОВКА НОРМЫ ==========
+  if (userState.step === 'waiting_for_goal') {
+    let goal = 0;
     
-    // ========== ШАГ 1: УСТАНОВКА НОРМЫ ==========
-    case 'waiting_for_goal':
-      await handleGoalSetting(chatId, text, userName);
-      break;
-      
-    case 'waiting_for_custom_goal':
-      await handleCustomGoal(chatId, text, userName);
-      break;
-      
-    // ========== ШАГ 2: ГЛАВНОЕ МЕНЮ ==========
-    case 'main_menu':
-      await handleMainMenu(chatId, text, user, userName);
-      break;
-      
-    // ========== ШАГ 3: ДОБАВЛЕНИЕ ЕДЫ ==========
-    case 'adding_food':
-      await handleAddingFood(chatId, text, user);
-      break;
-      
-    case 'reminding_quantity':
-      await handleQuantityReminder(chatId, text, userState.data);
-      break;
-      
-    case 'adding_quantity':
-      await handleAddingQuantity(chatId, text, userState.data);
-      break;
-      
-    case 'confirming_food':
-      await handleConfirmingFood(chatId, text, userState.data, user);
-      break;
-      
-    case 'correcting_calories':
-      await handleCorrectingCalories(chatId, text, userState.data, user);
-      break;
-      
-    // ========== ШАГ 4: ПОИСК ПРОДУКТА ==========
-    case 'searching_food':
-      await handleSearchingFood(chatId, text);
-      break;
-      
-    case 'confirming_search':
-      await handleConfirmingSearch(chatId, text, userState.data, user);
-      break;
-      
-    case 'specifying_quantity':
-      await handleSpecifyingQuantity(chatId, text, userState.data, user);
-      break;
-      
-    // ========== ШАГ 5: ИЗМЕНЕНИЕ НОРМЫ ==========
-    case 'changing_goal':
-      await handleChangingGoal(chatId, text, user);
-      break;
-      
-    // ========== НЕИЗВЕСТНОЕ СОСТОЯНИЕ ==========
-    default:
-      await handleUnknownState(chatId, user);
-      break;
-  }
-});
-
-// ========== ФУНКЦИИ ОБРАБОТКИ СОСТОЯНИЙ ==========
-
-// ========== ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ И СОСТОЯНИЯ ==========
-
-// Состояния пользователей с улучшенной структурой
-const userStates = new Map(); // chatId -> {step, data, timestamp}
-
-// Основная клавиатура
-const mainKeyboard = {
-  keyboard: [
-    ['🍽️ Добавить еду', '📊 Статистика'],
-    ['🎯 Изменить норму', '📋 Продукты'],
-    ['🔄 Сбросить день', '❓ Помощь']
-  ],
-  resize_keyboard: true,
-  one_time_keyboard: false
-};
-
-// Клавиатура для установки нормы
-const goalKeyboard = {
-  keyboard: [
-    ['1500 ккал (похудение)', '2000 ккал (поддержание)'],
-    ['2500 ккал (набор)', '✍️ Ввести свою норму']
-  ],
-  resize_keyboard: true,
-  one_time_keyboard: true
-};
-
-// Клавиатура для напоминания о граммовке
-const quantityReminderKeyboard = {
-  keyboard: [
-    ['✅ Продолжить с 100г', '✏️ Добавить граммовку'],
-    ['🔁 Переписать описание', '↩️ Отмена']
-  ],
-  resize_keyboard: true,
-  one_time_keyboard: true
-};
-
-// Клавиатура для подтверждения еды
-const confirmFoodKeyboard = {
-  keyboard: [
-    ['✅ Да, добавить', '✏️ Нет, изменить калории'],
-    ['🔍 Найти в базе', '↩️ Отмена']
-  ],
-  resize_keyboard: true,
-  one_time_keyboard: true
-};
-
-// ========== ОБРАБОТЧИК СТАРТА ==========
-
-bot.onText(/\/start/, (msg) => {
-  const chatId = msg.chat.id;
-  const userName = msg.from.first_name;
-  
-  const welcomeMessage = `👋 *Привет, ${userName}!* 🍎\n\n` +
-    `Я — твой персональный помощник для подсчета калорий!\n\n` +
-    `📊 *Мои возможности:*\n` +
-    `• База из ${Object.keys(foodDatabase).length} продуктов\n` +
-    `• Умный поиск с перестановкой слов\n` +
-    `• Ручная корректировка калорий\n` +
-    `• Подсчет БЖУ (белки, жиры, углеводы)\n\n` +
-    `🎯 *Давайте начнем!*\n` +
-    `Сначала установите вашу дневную норму калорий:`;
-  
-  // Устанавливаем начальное состояние
-  userStates.set(chatId, { 
-    step: 'waiting_for_goal',
-    data: {},
-    timestamp: Date.now()
-  });
-  
-  bot.sendMessage(chatId, welcomeMessage, {
-    parse_mode: 'Markdown',
-    reply_markup: goalKeyboard
-  });
-});
-
-// ========== ГЛАВНЫЙ ОБРАБОТЧИК СООБЩЕНИЙ ==========
-
-bot.on('message', async (msg) => {
-  const chatId = msg.chat.id;
-  const text = msg.text;
-  const userName = msg.from.first_name;
-  
-  // Пропускаем команды (кроме /start который уже обработан)
-  if (text.startsWith('/')) return;
-  
-  // Получаем состояние пользователя
-  const userState = userStates.get(chatId) || { step: 'unknown' };
-  const user = userData.get(chatId) || {};
-  
-  console.log(`[${chatId}] Состояние: ${userState.step}, Текст: "${text}"`);
-  
-  // ========== ОБРАБОТКА ПО СОСТОЯНИЯМ ==========
-  
-  switch (userState.step) {
-    
-    // ========== ШАГ 1: УСТАНОВКА НОРМЫ ==========
-    case 'waiting_for_goal':
-      await handleGoalSetting(chatId, text, userName);
-      break;
-      
-    case 'waiting_for_custom_goal':
-      await handleCustomGoal(chatId, text, userName);
-      break;
-      
-    // ========== ШАГ 2: ГЛАВНОЕ МЕНЮ ==========
-    case 'main_menu':
-      await handleMainMenu(chatId, text, user, userName);
-      break;
-      
-    // ========== ШАГ 3: ДОБАВЛЕНИЕ ЕДЫ ==========
-    case 'adding_food':
-      await handleAddingFood(chatId, text, user);
-      break;
-      
-    case 'reminding_quantity':
-      await handleQuantityReminder(chatId, text, userState.data);
-      break;
-      
-    case 'adding_quantity':
-      await handleAddingQuantity(chatId, text, userState.data);
-      break;
-      
-    case 'confirming_food':
-      await handleConfirmingFood(chatId, text, userState.data, user);
-      break;
-      
-    case 'correcting_calories':
-      await handleCorrectingCalories(chatId, text, userState.data, user);
-      break;
-      
-    // ========== ШАГ 4: ПОИСК ПРОДУКТА ==========
-    case 'searching_food':
-      await handleSearchingFood(chatId, text);
-      break;
-      
-    case 'confirming_search':
-      await handleConfirmingSearch(chatId, text, userState.data, user);
-      break;
-      
-    case 'specifying_quantity':
-      await handleSpecifyingQuantity(chatId, text, userState.data, user);
-      break;
-      
-    // ========== ШАГ 5: ИЗМЕНЕНИЕ НОРМЫ ==========
-    case 'changing_goal':
-      await handleChangingGoal(chatId, text, user);
-      break;
-      
-    // ========== НЕИЗВЕСТНОЕ СОСТОЯНИЕ ==========
-    default:
-      await handleUnknownState(chatId, user);
-      break;
-  }
-});
-
-// ========== ФУНКЦИИ ОБРАБОТКИ СОСТОЯНИЙ ==========
-
-// 1. Установка нормы из меню
-async function handleGoalSetting(chatId, text, userName) {
-  let goal = 0;
-  
-  if (text.includes('1500')) {
-    goal = 1500;
-  } else if (text.includes('2000')) {
-    goal = 2000;
-  } else if (text.includes('2500')) {
-    goal = 2500;
-  } else if (text === '✍️ Ввести свою норму') {
-    userStates.set(chatId, { 
-      step: 'waiting_for_custom_goal',
-      data: {},
-      timestamp: Date.now()
-    });
-    
-    bot.sendMessage(chatId, 
-      '✍️ *Введите вашу индивидуальную норму калорий:*\n\n' +
-      'Просто напишите число (например: 1800)',
-      { parse_mode: 'Markdown' }
-    );
-    return;
-  } else {
-    // Пытаемся извлечь число
-    const match = text.match(/\d+/);
-    if (match) {
-      goal = parseInt(match[0]);
-    } else {
+    // Парсим ввод
+    if (text.includes('1500')) {
+      goal = 1500;
+    } else if (text.includes('2000')) {
+      goal = 2000;
+    } else if (text.includes('2500')) {
+      goal = 2500;
+    } else if (text === 'Ввести свою норму') {
       bot.sendMessage(chatId, 
-        '❌ Пожалуйста, выберите вариант из меню или введите число\n\n' +
-        'Пример: "1800" или нажмите кнопку',
+        '✍️ *Введите вашу индивидуальную норму калорий:*\n\n' +
+        'Просто напишите число (например: 1800)',
+        { parse_mode: 'Markdown' }
+      );
+      userStates.set(chatId, { step: 'waiting_for_custom_goal' });
+      return;
+    } else {
+      // Пытаемся извлечь число из текста
+      const match = text.match(/\d+/);
+      if (match) {
+        goal = parseInt(match[0]);
+      } else {
+        bot.sendMessage(chatId, 
+          '❌ Пожалуйста, выберите вариант из меню или введите число\n\n' +
+          'Пример: "1800" или нажмите кнопку',
+          { reply_markup: goalKeyboard }
+        );
+        return;
+      }
+    }
+    
+    // Проверяем корректность
+    if (goal < 500 || goal > 10000) {
+      bot.sendMessage(chatId, 
+        '❌ Пожалуйста, введите реалистичную норму (500-10000 ккал)\n\n' +
+        'Пример: 2000',
         { reply_markup: goalKeyboard }
       );
       return;
     }
-  }
-  
-  // Проверка корректности
-  if (goal < 500 || goal > 10000) {
-    bot.sendMessage(chatId, 
-      '❌ Пожалуйста, введите реалистичную норму (500-10000 ккал)\n\n' +
-      'Пример: 2000',
-      { reply_markup: goalKeyboard }
-    );
-    return;
-  }
-  
-  // Сохраняем норму
-  const user = userData.get(chatId) || {};
-  user.dailyGoal = goal;
-  user.consumed = 0;
-  user.foods = [];
-  userData.set(chatId, user);
-  
-  // Переходим в главное меню
-  userStates.set(chatId, { 
-    step: 'main_menu',
-    data: {},
-    timestamp: Date.now()
-  });
-  
-  const successMessage = `✅ *Отлично, ${userName}!*\n\n` +
-    `Дневная норма установлена: *${goal} ккал*\n\n` +
-    `🍎 *Теперь вы можете:*\n` +
-    `• Добавлять съеденную еду\n` +
-    `• Следить за статистикой\n` +
-    `• Искать продукты в базе\n\n` +
-    `*Просто нажмите нужную кнопку в меню ниже!*`;
-  
-  bot.sendMessage(chatId, successMessage, {
-    parse_mode: 'Markdown',
-    reply_markup: mainKeyboard
-  });
-}
-
-// 2. Ввод индивидуальной нормы
-async function handleCustomGoal(chatId, text) {
-  const goal = parseInt(text);
-  
-  if (isNaN(goal) || goal < 500 || goal > 10000) {
-    bot.sendMessage(chatId, 
-      '❌ Пожалуйста, введите число от 500 до 10000\n\n' +
-      'Пример: 1800',
-      { parse_mode: 'Markdown' }
-    );
-    return;
-  }
-  
-  // Сохраняем норму
-  const user = userData.get(chatId) || {};
-  user.dailyGoal = goal;
-  user.consumed = 0;
-  user.foods = [];
-  userData.set(chatId, user);
-  
-  // Переходим в главное меню
-  userStates.set(chatId, { 
-    step: 'main_menu',
-    data: {},
-    timestamp: Date.now()
-  });
-  
-  const successMessage = `✅ *Норма установлена: ${goal} ккал*\n\n` +
-    `Теперь используйте меню ниже для работы с ботом!`;
-  
-  bot.sendMessage(chatId, successMessage, {
-    parse_mode: 'Markdown',
-    reply_markup: mainKeyboard
-  });
-}
-
-// 3. Главное меню
-async function handleMainMenu(chatId, text, user, userName) {
-  // Проверяем установлена ли норма
-  if (!user.dailyGoal) {
-    userStates.set(chatId, { 
-      step: 'waiting_for_goal',
-      data: {},
-      timestamp: Date.now()
+    
+    // Сохраняем норму
+    user.dailyGoal = goal;
+    user.consumed = 0;
+    user.foods = [];
+    userData.set(chatId, user);
+    
+    // Меняем состояние
+    userStates.set(chatId, { step: 'main_menu' });
+    
+    // Отправляем приветствие с основной клавиатурой
+    const successMessage = `✅ *Отлично, ${userName}!*\n\n` +
+      `Дневная норма установлена: *${goal} ккал*\n\n` +
+      `🍎 *Теперь вы можете:*\n` +
+      `• Добавлять съеденную еду\n` +
+      `• Следить за статистикой\n` +
+      `• Искать продукты в базе\n\n` +
+      `*Просто нажмите нужную кнопку в меню ниже!*`;
+    
+    bot.sendMessage(chatId, successMessage, {
+      parse_mode: 'Markdown',
+      reply_markup: mainKeyboard
     });
     
-    bot.sendMessage(chatId, 
-      '🎯 Сначала установите дневную норму калорий:',
-      { reply_markup: goalKeyboard }
-    );
     return;
   }
   
-  // Обработка кнопок меню
-  switch (text) {
-    case '🍽️ Добавить еду':
-      userStates.set(chatId, { 
-        step: 'adding_food',
-        data: {},
+  // ========== ШАГ 1.1: ВВОД ИНДИВИДУАЛЬНОЙ НОРМЫ ==========
+  if (userState.step === 'waiting_for_custom_goal') {
+    const goal = parseInt(text);
+    
+    if (isNaN(goal) || goal < 500 || goal > 10000) {
+      bot.sendMessage(chatId, 
+        '❌ Пожалуйста, введите число от 500 до 10000\n\n' +
+        'Пример: 1800',
+        { parse_mode: 'Markdown' }
+      );
+      return;
+    }
+    
+    // Сохраняем норму
+    user.dailyGoal = goal;
+    user.consumed = 0;
+    user.foods = [];
+    userData.set(chatId, user);
+    
+    // Меняем состояние
+    userStates.set(chatId, { step: 'main_menu' });
+    
+    const successMessage = `✅ *Норма установлена: ${goal} ккал*\n\n` +
+      `Теперь используйте меню ниже для работы с ботом!`;
+    
+    bot.sendMessage(chatId, successMessage, {
+      parse_mode: 'Markdown',
+      reply_markup: mainKeyboard
+    });
+    
+    return;
+  }
+  
+  // ========== ОСНОВНОЕ МЕНЮ ==========
+  if (userState.step === 'main_menu') {
+    // Проверяем установлена ли норма
+    if (!user.dailyGoal) {
+      userStates.set(chatId, { step: 'waiting_for_goal' });
+      bot.sendMessage(chatId, 
+        '🎯 Сначала установите дневную норму калорий:',
+        { reply_markup: goalKeyboard }
+      );
+      return;
+    }
+    
+    // Обработка кнопок меню
+    switch (text) {
+      case '🍽️ Добавить еду':
+        userStates.set(chatId, { step: 'adding_food' });
+        bot.sendMessage(chatId, 
+          '🍽️ *Что вы съели?*\n\n' +
+          'Опишите блюдо или продукт:\n\n' +
+          '*Примеры:*\n' +
+          '• "200г риса с курицей"\n' +
+          '• "2 яйца и кофе"\n' +
+          '• "Яблоко 150г"\n\n' +
+          'Просто напишите и нажмите отправить!',
+          { parse_mode: 'Markdown' }
+        );
+        break;
+        
+      case '📊 Статистика':
+        showTodayStats(chatId, user);
+        break;
+        
+      case '🎯 Изменить норму':
+        userStates.set(chatId, { step: 'changing_goal' });
+        bot.sendMessage(chatId, 
+          '🎯 *Текущая норма: ' + user.dailyGoal + ' ккал*\n\n' +
+          'Введите новую дневную норму калорий:',
+          { parse_mode: 'Markdown' }
+        );
+        break;
+        
+      case '📋 Продукты':
+        showProductsList(chatId);
+        break;
+        
+      case '🔄 Сбросить день':
+        user.consumed = 0;
+        user.foods = [];
+        userData.set(chatId, user);
+        bot.sendMessage(chatId, 
+          '✅ *Данные за день сброшены!*\n\n' +
+          'Можно начинать новый день!',
+          { parse_mode: 'Markdown', reply_markup: mainKeyboard }
+        );
+        break;
+        
+      case '❓ Помощь':
+        showHelp(chatId);
+        break;
+        
+      default:
+        // Если текст не соответствует кнопкам, предлагаем добавить как еду
+        if (user.dailyGoal) {
+          userStates.set(chatId, { step: 'adding_food' });
+          // Имитируем нажатие "Добавить еду"
+          const fakeMsg = { ...msg, text: text };
+          bot.emit('message', fakeMsg);
+        }
+        break;
+    }
+    return;
+  }
+  
+  // ========== ДОБАВЛЕНИЕ ЕДЫ ==========
+  if (userState.step === 'adding_food') {
+    if (!text || text.length < 2) {
+      bot.sendMessage(chatId, 'Пожалуйста, опишите что вы съели');
+      return;
+    }
+    
+    bot.sendChatAction(chatId, 'typing');
+    
+    try {
+      // Используем существующую логику анализа еды
+      const searchResult = findProductInDatabaseEnhanced(text);
+      
+      // Извлекаем количество
+      let quantity = 100;
+      let unit = 'г';
+      const quantityMatch = text.match(/(\d+)\s*(г|грамм|мл|шт|штук)/i);
+      
+      if (quantityMatch) {
+        quantity = parseInt(quantityMatch[1]);
+        unit = quantityMatch[2].toLowerCase();
+      }
+      
+      let analysis = null;
+      
+      if (searchResult) {
+        // Нашли в базе
+        const nutrition = searchResult.nutrition;
+        const calories = Math.round((nutrition.calories * quantity) / 100);
+        
+        analysis = {
+          foodName: searchResult.productName,
+          quantity: quantity,
+          unit: unit,
+          calories: calories,
+          protein: Math.round((nutrition.protein * quantity) / 100 * 10) / 10,
+          fat: Math.round((nutrition.fat * quantity) / 100 * 10) / 10,
+          carbs: Math.round((nutrition.carbs * quantity) / 100 * 10) / 10,
+          source: '📚 База данных'
+        };
+      } else {
+        // Оценка
+        const estimatedCalories = estimateCaloriesFromText(text, quantity);
+        analysis = {
+          foodName: text.substring(0, 40),
+          quantity: quantity,
+          unit: unit,
+          calories: estimatedCalories,
+          protein: Math.round(quantity * 0.1),
+          fat: Math.round(quantity * 0.08),
+          carbs: Math.round(quantity * 0.2),
+          source: '📊 Примерная оценка'
+        };
+      }
+      
+      // Предлагаем подтвердить или скорректировать
+      let response = `🍽️ *${analysis.foodName}*\n`;
+      response += `📏 ${analysis.quantity}${analysis.unit}\n`;
+      response += `🔥 *${analysis.calories} ккал*\n\n`;
+      
+      if (analysis.protein > 0 || analysis.fat > 0 || analysis.carbs > 0) {
+        response += `🥩 Белки: ${analysis.protein.toFixed(1)}г\n`;
+        response += `🥑 Жиры: ${analysis.fat.toFixed(1)}г\n`;
+        response += `🍚 Углеводы: ${analysis.carbs.toFixed(1)}г\n\n`;
+      }
+      
+      response += `${analysis.source}\n\n`;
+      response += `*Это правильно?*`;
+      
+      // Сохраняем временные данные
+      pendingCorrections.set(chatId, {
+        text: text,
+        analysis: analysis,
         timestamp: Date.now()
       });
       
-      bot.sendMessage(chatId, 
-        '🍽️ *Что вы съели?*\n\n' +
-        '📏 *ВАЖНО: Указывайте количество!*\n\n' +
-        '*Примеры с граммовкой:*\n' +
-        '• "200г риса с курицей"\n' +
-        '• "2 яйца и кофе"\n' +
-        '• "Яблоко 150г"\n' +
-        '• "Кофе с молоком 200мл"\n\n' +
-        '*Без указания количества бот посчитает как 100г*\n\n' +
-        'Просто напишите и нажмите отправить!',
-        { parse_mode: 'Markdown' }
-      );
-      break;
+      // Клавиатура для подтверждения
+      const confirmKeyboard = {
+        keyboard: [
+          ['✅ Да, добавить', '✏️ Нет, изменить калории'],
+          ['🔍 Найти в базе', '↩️ Отмена']
+        ],
+        resize_keyboard: true,
+        one_time_keyboard: true
+      };
       
-    case '📊 Статистика':
-      showTodayStats(chatId, user);
-      break;
-      
-    case '🎯 Изменить норму':
-      userStates.set(chatId, { 
-        step: 'changing_goal',
-        data: { currentGoal: user.dailyGoal },
-        timestamp: Date.now()
+      bot.sendMessage(chatId, response, {
+        parse_mode: 'Markdown',
+        reply_markup: confirmKeyboard
       });
       
+      userStates.set(chatId, { step: 'confirming_food' });
+      
+    } catch (error) {
+      console.error('Ошибка обработки:', error);
       bot.sendMessage(chatId, 
-        `🎯 *Текущая норма: ${user.dailyGoal} ккал*\n\n` +
-        'Введите новую дневную норму калорий:',
-        { parse_mode: 'Markdown' }
-      );
-      break;
-      
-    case '📋 Продукты':
-      showProductsList(chatId);
-      break;
-      
-    case '🔄 Сбросить день':
-      user.consumed = 0;
-      user.foods = [];
-      userData.set(chatId, user);
-      
-      bot.sendMessage(chatId, 
-        '✅ *Данные за день сброшены!*\n\n' +
-        'Можно начинать новый день!',
-        { parse_mode: 'Markdown', reply_markup: mainKeyboard }
-      );
-      break;
-      
-    case '❓ Помощь':
-      showHelp(chatId);
-      break;
-      
-    default:
-      // Если текст не соответствует кнопкам, предлагаем добавить как еду
-      bot.sendMessage(chatId, 
-        'Хотите добавить это как съеденную еду?\n\n' +
-        'Напишите "да" чтобы продолжить.',
+        '❌ Ошибка. Попробуйте еще раз или опишите по-другому',
         { reply_markup: mainKeyboard }
       );
-      break;
-  }
-}
-
-// 4. Добавление еды
-async function handleAddingFood(chatId, text, user) {
-  if (!text || text.length < 2) {
-    bot.sendMessage(chatId, 'Пожалуйста, опишите что вы съели');
+      userStates.set(chatId, { step: 'main_menu' });
+    }
     return;
   }
   
-  // Проверяем наличие граммовки
-  const hasQuantity = /\d+\s*(г|грамм|мл|шт|штук|кг|литр)/i.test(text);
-  
-  if (!hasQuantity) {
-    // Сохраняем текст и переходим к напоминанию
-    userStates.set(chatId, { 
-      step: 'reminding_quantity',
-      data: { originalText: text },
-      timestamp: Date.now()
-    });
+  // ========== ПОДТВЕРЖДЕНИЕ ЕДЫ ==========
+  if (userState.step === 'confirming_food') {
+    const pending = pendingCorrections.get(chatId);
     
-    const reminderMessage = `📏 *Напоминание о количестве*\n\n` +
-      `Вы не указали количество продукта!\n\n` +
-      `*Для точного подсчета укажите граммовку:*\n` +
-      `• Добавьте "200г" к названию\n` +
-      `• Или укажите "2 шт"\n` +
-      `• Пример: "${text} 150г"\n\n` +
-      `*Без указания количества бот посчитает как 100г*\n\n` +
-      `Продолжить с 100г или изменить описание?`;
+    if (!pending) {
+      bot.sendMessage(chatId, 'Время истекло. Попробуйте снова.', {
+        reply_markup: mainKeyboard
+      });
+      userStates.set(chatId, { step: 'main_menu' });
+      return;
+    }
     
-    bot.sendMessage(chatId, reminderMessage, {
-      parse_mode: 'Markdown',
-      reply_markup: quantityReminderKeyboard
-    });
+    const analysis = pending.analysis;
+    
+    switch (text) {
+      case '✅ Да, добавить':
+        // Сохраняем данные
+        user.consumed = (user.consumed || 0) + analysis.calories;
+        user.foods = user.foods || [];
+        user.foods.push({
+          name: analysis.foodName,
+          calories: analysis.calories,
+          quantity: analysis.quantity,
+          unit: analysis.unit,
+          protein: analysis.protein || 0,
+          fat: analysis.fat || 0,
+          carbs: analysis.carbs || 0,
+          time: new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }),
+          source: analysis.source,
+          addedAt: new Date().toISOString()
+        });
+        
+        userData.set(chatId, user);
+        pendingCorrections.delete(chatId);
+        
+        const remaining = Math.max(0, user.dailyGoal - user.consumed);
+        const percent = Math.round((user.consumed / user.dailyGoal) * 100);
+        
+        let response = `✅ *Добавлено!*\n\n`;
+        response += `🍽️ ${analysis.foodName}\n`;
+        response += `📏 ${analysis.quantity}${analysis.unit}\n`;
+        response += `🔥 ${analysis.calories} ккал\n\n`;
+        response += `📊 *Итого за день:* ${user.consumed}/${user.dailyGoal} ккал\n`;
+        response += `📉 *Осталось:* ${remaining} ккал\n`;
+        response += `📈 *Прогресс:* ${percent}%`;
+        
+        // Прогресс бар
+        const barLength = 10;
+        const filled = Math.min(barLength, Math.floor(percent / 10));
+        const bar = '🟩'.repeat(filled) + '⬜'.repeat(barLength - filled);
+        response += `\n\n${bar}`;
+        
+        bot.sendMessage(chatId, response, {
+          parse_mode: 'Markdown',
+          reply_markup: mainKeyboard
+        });
+        
+        userStates.set(chatId, { step: 'main_menu' });
+        break;
+        
+      case '✏️ Нет, изменить калории':
+        bot.sendMessage(chatId, 
+          '✍️ *Введите правильное количество калорий:*\n\n' +
+          `Для: ${analysis.foodName}\n` +
+          `Примерное количество: ${analysis.quantity}${analysis.unit}\n\n` +
+          'Просто напишите число (например: 350)',
+          { parse_mode: 'Markdown' }
+        );
+        userStates.set(chatId, { step: 'correcting_calories' });
+        break;
+        
+      case '🔍 Найти в базе':
+        bot.sendMessage(chatId, 
+          '🔍 *Поиск продукта в базе*\n\n' +
+          'Введите название продукта для поиска:',
+          { parse_mode: 'Markdown' }
+        );
+        userStates.set(chatId, { step: 'searching_food' });
+        break;
+        
+      case '↩️ Отмена':
+        bot.sendMessage(chatId, 'Отменено. Что делаем дальше?', {
+          reply_markup: mainKeyboard
+        });
+        userStates.set(chatId, { step: 'main_menu' });
+        pendingCorrections.delete(chatId);
+        break;
+        
+      default:
+        bot.sendMessage(chatId, 'Пожалуйста, выберите вариант из меню', {
+          reply_markup: {
+            keyboard: [
+              ['✅ Да, добавить', '✏️ Нет, изменить калорий'],
+              ['🔍 Найти в базе', '↩️ Отмена']
+            ],
+            resize_keyboard: true,
+            one_time_keyboard: true
+          }
+        });
+        break;
+    }
     return;
   }
   
-  // Если граммовка есть, анализируем еду
-  bot.sendChatAction(chatId, 'typing');
-  
-  try {
-    // Используем существующую логику анализа
-    const searchResult = findProductInDatabaseEnhanced(text);
+  // ========== КОРРЕКТИРОВКА КАЛОРИЙ ==========
+  if (userState.step === 'correcting_calories') {
+    const pending = pendingCorrections.get(chatId);
     
-    // Извлекаем количество
-    let quantity = 100;
-    let unit = 'г';
-    const quantityMatch = text.match(/(\d+)\s*(г|грамм|мл|шт|штук)/i);
-    
-    if (quantityMatch) {
-      quantity = parseInt(quantityMatch[1]);
-      unit = quantityMatch[2].toLowerCase();
+    if (!pending) {
+      bot.sendMessage(chatId, 'Время истекло. Попробуйте снова.', {
+        reply_markup: mainKeyboard
+      });
+      userStates.set(chatId, { step: 'main_menu' });
+      return;
     }
     
-    let analysis = null;
+    const calories = parseInt(text);
+    const analysis = pending.analysis;
     
-    if (searchResult) {
-      // Нашли в базе
-      const nutrition = searchResult.nutrition;
-      const calories = Math.round((nutrition.calories * quantity) / 100);
-      
-      analysis = {
-        foodName: searchResult.productName,
-        quantity: quantity,
-        unit: unit,
-        calories: calories,
-        protein: Math.round((nutrition.protein * quantity) / 100 * 10) / 10,
-        fat: Math.round((nutrition.fat * quantity) / 100 * 10) / 10,
-        carbs: Math.round((nutrition.carbs * quantity) / 100 * 10) / 10,
-        source: '📚 База данных',
-        searchMethod: searchResult.method
-      };
-    } else {
-      // Оценка по ключевым словам
-      const estimatedCalories = estimateCaloriesFromText(text, quantity);
-      
-      analysis = {
-        foodName: text.substring(0, 40),
-        quantity: quantity,
-        unit: unit,
-        calories: estimatedCalories,
-        protein: Math.round(quantity * 0.1),
-        fat: Math.round(quantity * 0.08),
-        carbs: Math.round(quantity * 0.2),
-        source: '📊 Примерная оценка',
-        searchMethod: 'оценка'
-      };
+    if (isNaN(calories) || calories <= 0 || calories > 5000) {
+      bot.sendMessage(chatId, 
+        '❌ Введите число от 1 до 5000\n\n' +
+        'Пример: 350',
+        { parse_mode: 'Markdown' }
+      );
+      return;
     }
     
-    // Сохраняем анализ и переходим к подтверждению
-    userStates.set(chatId, { 
-      step: 'confirming_food',
-      data: { analysis: analysis, originalText: text },
-      timestamp: Date.now()
+    // Сохраняем с исправленными калориями
+    user.consumed = (user.consumed || 0) + calories;
+    user.foods = user.foods || [];
+    user.foods.push({
+      name: analysis.foodName,
+      calories: calories,
+      quantity: analysis.quantity,
+      unit: analysis.unit,
+      protein: analysis.protein || 0,
+      fat: analysis.fat || 0,
+      carbs: analysis.carbs || 0,
+      time: new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }),
+      source: '✍️ Ручная корректировка',
+      addedAt: new Date().toISOString()
     });
     
-    // Формируем сообщение с результатом анализа
-    let response = `🍽️ *${analysis.foodName}*\n`;
+    userData.set(chatId, user);
+    pendingCorrections.delete(chatId);
+    
+    const remaining = Math.max(0, user.dailyGoal - user.consumed);
+    const percent = Math.round((user.consumed / user.dailyGoal) * 100);
+    
+    let response = `✅ *Добавлено с корректировкой!*\n\n`;
+    response += `🍽️ ${analysis.foodName}\n`;
     response += `📏 ${analysis.quantity}${analysis.unit}\n`;
-    response += `🔥 *${analysis.calories} ккал*\n\n`;
-    
-    if (analysis.protein > 0 || analysis.fat > 0 || analysis.carbs > 0) {
-      response += `🥩 Белки: ${analysis.protein.toFixed(1)}г\n`;
-      response += `🥑 Жиры: ${analysis.fat.toFixed(1)}г\n`;
-      response += `🍚 Углеводы: ${analysis.carbs.toFixed(1)}г\n\n`;
-    }
-    
-    response += `${analysis.source}\n`;
-    
-    if (analysis.searchMethod) {
-      response += `🔍 Метод: ${analysis.searchMethod}\n\n`;
-    }
-    
-    response += `*Это правильно?*`;
+    response += `🔥 ${calories} ккал\n\n`;
+    response += `📊 *Итого за день:* ${user.consumed}/${user.dailyGoal} ккал\n`;
+    response += `📉 *Осталось:* ${remaining} ккал\n`;
+    response += `📈 *Прогресс:* ${percent}%\n\n`;
+    response += `✍️ *Калории указаны вручную*`;
     
     bot.sendMessage(chatId, response, {
       parse_mode: 'Markdown',
-      reply_markup: confirmFoodKeyboard
+      reply_markup: mainKeyboard
     });
     
-  } catch (error) {
-    console.error('Ошибка анализа еды:', error);
-    
-    bot.sendMessage(chatId, 
-      '❌ Ошибка анализа. Попробуйте описать по-другому или используйте поиск в базе.',
-      { reply_markup: mainKeyboard }
-    );
-    
-    userStates.set(chatId, { 
-      step: 'main_menu',
-      data: {},
-      timestamp: Date.now()
-    });
+    userStates.set(chatId, { step: 'main_menu' });
+    return;
   }
-}
-
-// 5. Напоминание о граммовке
-async function handleQuantityReminder(chatId, text, data) {
-  const originalText = data.originalText;
   
-  switch (text) {
-    case '✅ Продолжить с 100г':
-      // Продолжаем с добавлением "100г" к тексту
-      const textWith100g = originalText + ' 100г';
+  // ========== ПОИСК ПРОДУКТА В БАЗЕ ==========
+  if (userState.step === 'searching_food') {
+    const searchResult = findProductInDatabaseEnhanced(text);
+    
+    if (searchResult) {
+      const { productName, nutrition } = searchResult;
       
-      // Обновляем состояние и запускаем анализ
-      userStates.set(chatId, { 
-        step: 'adding_food',
-        data: {},
+      let response = `🔍 *Найдено в базе:*\n\n`;
+      response += `🍽️ *${productName}*\n`;
+      response += `📊 ${nutrition.calories} ккал/100г\n`;
+      
+      if (nutrition.protein || nutrition.fat || nutrition.carbs) {
+        response += `🥩 Белки: ${nutrition.protein || 0}г\n`;
+        response += `🥑 Жиры: ${nutrition.fat || 0}г\n`;
+        response += `🍚 Углеводы: ${nutrition.carbs || 0}г\n\n`;
+      }
+      
+      response += `*Хотите добавить этот продукт?*`;
+      
+      // Сохраняем найденный продукт для добавления
+      pendingCorrections.set(chatId, {
+        text: text,
+        analysis: {
+          foodName: productName,
+          nutrition: nutrition
+        },
         timestamp: Date.now()
       });
       
-      bot.sendMessage(chatId, 
-        `✅ *Продолжаю с 100г*\n\n` +
-        `Новое описание: *"${textWith100g}"*\n\n` +
-        `Анализирую...`,
-        { parse_mode: 'Markdown' }
-      );
+      const searchKeyboard = {
+        keyboard: [
+          ['✅ Да, добавить', '✏️ Указать количество'],
+          ['🔍 Новый поиск', '↩️ Отмена']
+        ],
+        resize_keyboard: true,
+        one_time_keyboard: true
+      };
       
-      // Имитируем отправку сообщения для обработки
-      setTimeout(() => {
-        const fakeMsg = {
-          chat: { id: chatId },
-          from: { id: chatId },
-          text: textWith100g,
-          message_id: Date.now()
-        };
-        bot.emit('message', fakeMsg);
-      }, 1000);
-      break;
-      
-    case '✏️ Добавить граммовку':
-      userStates.set(chatId, { 
-        step: 'adding_quantity',
-        data: { originalText: originalText },
-        timestamp: Date.now()
+      bot.sendMessage(chatId, response, {
+        parse_mode: 'Markdown',
+        reply_markup: searchKeyboard
       });
       
+      userStates.set(chatId, { step: 'confirming_search' });
+    } else {
       bot.sendMessage(chatId, 
-        `✍️ *Добавьте граммовку:*\n\n` +
-        `Текущее описание: *"${originalText}"*\n\n` +
-        `*Как добавить:*\n` +
-        `• Напишите "${originalText} 200г"\n` +
-        `• Или просто "200г" (я добавлю автоматически)\n\n` +
-        `Теперь напишите исправленное описание:`,
-        { parse_mode: 'Markdown' }
-      );
-      break;
-      
-    case '🔁 Переписать описание':
-      userStates.set(chatId, { 
-        step: 'adding_food',
-        data: {},
-        timestamp: Date.now()
-      });
-      
-      bot.sendMessage(chatId, 
-        '✍️ *Напишите новое описание с граммовкой:*\n\n' +
-        'Пример: "200г риса с курицей"\n' +
-        'Или: "2 яйца и кофе"',
-        { parse_mode: 'Markdown' }
-      );
-      break;
-      
-    case '↩️ Отмена':
-      userStates.set(chatId, { 
-        step: 'main_menu',
-        data: {},
-        timestamp: Date.now()
-      });
-      
-      bot.sendMessage(chatId, 
-        'Отменено. Что делаем дальше?',
-        { reply_markup: mainKeyboard }
-      );
-      break;
-      
-    default:
-      // Если пользователь ввел текст, проверяем есть ли граммовка
-      const hasQuantity = /\d+\s*(г|грамм|мл|шт|штук)/i.test(text);
-      
-      if (hasQuantity) {
-        // Проверяем, содержит ли текст оригинальное описание
-        let finalText = text;
-        if (!text.toLowerCase().includes(originalText.toLowerCase())) {
-          finalText = originalText + ' ' + text.trim();
+        `❌ *"${text}" не найден в базе*\n\n` +
+        `Попробуйте:\n` +
+        `• Другое название\n` +
+        `• Более общее название\n` +
+        `• Или добавьте вручную`,
+        { 
+          parse_mode: 'Markdown',
+          reply_markup: {
+            keyboard: [
+              ['🔍 Новый поиск', '↩️ Назад к добавлению']
+            ],
+            resize_keyboard: true,
+            one_time_keyboard: true
+          }
         }
+      );
+    }
+    return;
+  }
+  
+  // ========== ПОДТВЕРЖДЕНИЕ НАЙДЕННОГО ПРОДУКТА ==========
+  if (userState.step === 'confirming_search') {
+    const pending = pendingCorrections.get(chatId);
+    
+    if (!pending) {
+      bot.sendMessage(chatId, 'Время истекло. Попробуйте снова.', {
+        reply_markup: mainKeyboard
+      });
+      userStates.set(chatId, { step: 'main_menu' });
+      return;
+    }
+    
+    const analysis = pending.analysis;
+    const nutrition = analysis.nutrition;
+    
+    switch (text) {
+      case '✅ Да, добавить':
+        // Добавляем со стандартным количеством 100г
+        const calories = nutrition.calories;
         
-        // Переходим к анализу
-        userStates.set(chatId, { 
-          step: 'adding_food',
-          data: {},
-          timestamp: Date.now()
+        user.consumed = (user.consumed || 0) + calories;
+        user.foods = user.foods || [];
+        user.foods.push({
+          name: analysis.foodName,
+          calories: calories,
+          quantity: 100,
+          unit: 'г',
+          protein: nutrition.protein || 0,
+          fat: nutrition.fat || 0,
+          carbs: nutrition.carbs || 0,
+          time: new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }),
+          source: '📚 База данных (поиск)',
+          addedAt: new Date().toISOString()
         });
         
+        userData.set(chatId, user);
+        pendingCorrections.delete(chatId);
+        
+        const remaining = Math.max(0, user.dailyGoal - user.consumed);
+        const percent = Math.round((user.consumed / user.dailyGoal) * 100);
+        
+        let response = `✅ *Добавлено из поиска!*\n\n`;
+        response += `🍽️ ${analysis.foodName}\n`;
+        response += `📏 100г = ${calories} ккал\n\n`;
+        response += `📊 *Итого за день:* ${user.consumed}/${user.dailyGoal} ккал\n`;
+        response += `📉 *Осталось:* ${remaining} ккал\n`;
+        response += `📈 *Прогресс:* ${percent}%`;
+        
+        bot.sendMessage(chatId, response, {
+          parse_mode: 'Markdown',
+          reply_markup: mainKeyboard
+        });
+        
+        userStates.set(chatId, { step: 'main_menu' });
+        break;
+        
+      case '✏️ Указать количество':
         bot.sendMessage(chatId, 
-          `✅ *Принято!*\n\n` +
-          `Новое описание: *"${finalText}"*\n\n` +
-          `Анализирую...`,
+          `✍️ *Укажите количество для ${analysis.foodName}:*\n\n` +
+          `Пример: "200г" или просто "200"\n` +
+          `По умолчанию: 100г`,
           { parse_mode: 'Markdown' }
         );
+        userStates.set(chatId, { step: 'specifying_quantity' });
+        break;
         
-        // Имитируем отправку
-        setTimeout(() => {
-          const fakeMsg = {
-            chat: { id: chatId },
-            from: { id: chatId },
-            text: finalText,
-            message_id: Date.now()
-          };
-          bot.emit('message', fakeMsg);
-        }, 1000);
-      } else {
+      case '🔍 Новый поиск':
         bot.sendMessage(chatId, 
-          '❌ *Все еще нет граммовки!*\n\n' +
-          'Пожалуйста, добавьте количество или выберите вариант из меню:',
-          {
-            parse_mode: 'Markdown',
-            reply_markup: quantityReminderKeyboard
-          }
+          '🔍 *Введите название продукта для поиска:*',
+          { parse_mode: 'Markdown' }
         );
+        userStates.set(chatId, { step: 'searching_food' });
+        break;
+        
+      case '↩️ Отмена':
+      case '↩️ Назад к добавлению':
+        bot.sendMessage(chatId, 
+          '🍽️ *Что вы съели?*\n\n' +
+          'Опишите блюдо или продукт:',
+          { parse_mode: 'Markdown', reply_markup: mainKeyboard }
+        );
+        userStates.set(chatId, { step: 'adding_food' });
+        pendingCorrections.delete(chatId);
+        break;
+    }
+    return;
+  }
+  
+  // ========== УКАЗАНИЕ КОЛИЧЕСТВА ДЛЯ НАЙДЕННОГО ПРОДУКТА ==========
+  if (userState.step === 'specifying_quantity') {
+    const pending = pendingCorrections.get(chatId);
+    
+    if (!pending) {
+      bot.sendMessage(chatId, 'Время истекло. Попробуйте снова.', {
+        reply_markup: mainKeyboard
+      });
+      userStates.set(chatId, { step: 'main_menu' });
+      return;
+    }
+    
+    const analysis = pending.analysis;
+    const nutrition = analysis.nutrition;
+    
+    // Извлекаем количество из текста
+    let quantity = 100;
+    let unit = 'г';
+    
+    const match = text.match(/(\d+)\s*(г|грамм|мл|шт|штук|кг|литр|л)?/i);
+    if (match) {
+      quantity = parseInt(match[1]);
+      if (match[2]) {
+        unit = match[2].toLowerCase();
       }
-      break;
-  }
-}
-
-// 6. Добавление граммовки
-async function handleAddingQuantity(chatId, text, data) {
-  const originalText = data.originalText;
-  
-  if (!originalText) {
-    userStates.set(chatId, { 
-      step: 'main_menu',
-      data: {},
-      timestamp: Date.now()
+    }
+    
+    if (isNaN(quantity) || quantity <= 0 || quantity > 5000) {
+      bot.sendMessage(chatId, '❌ Введите число от 1 до 5000');
+      return;
+    }
+    
+    const calories = Math.round((nutrition.calories * quantity) / 100);
+    
+    // Добавляем
+    user.consumed = (user.consumed || 0) + calories;
+    user.foods = user.foods || [];
+    user.foods.push({
+      name: analysis.foodName,
+      calories: calories,
+      quantity: quantity,
+      unit: unit,
+      protein: Math.round((nutrition.protein * quantity) / 100 * 10) / 10,
+      fat: Math.round((nutrition.fat * quantity) / 100 * 10) / 10,
+      carbs: Math.round((nutrition.carbs * quantity) / 100 * 10) / 10,
+      time: new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }),
+      source: '📚 База данных (поиск)',
+      addedAt: new Date().toISOString()
     });
     
-    bot.sendMessage(chatId, 
-      'Извините, произошла ошибка. Давайте начнем заново.',
-      { reply_markup: mainKeyboard }
-    );
-    return;
-  }
-  
-  // Проверяем есть ли граммовка
-  const hasQuantity = /\d+\s*(г|грамм|мл|шт|штук)/i.test(text);
-  
-  if (!hasQuantity) {
-    bot.sendMessage(chatId, 
-      `❌ *Вы не указали количество!*\n\n` +
-      `Попробуйте еще раз:\n` +
-      `• "${originalText} 200г"\n` +
-      `• Или просто "200г"\n\n` +
-      `Пожалуйста, укажите количество:`,
-      { parse_mode: 'Markdown' }
-    );
-    return;
-  }
-  
-  // Формируем итоговый текст
-  let finalText = text;
-  if (!text.toLowerCase().includes(originalText.toLowerCase())) {
-    finalText = originalText + ' ' + text.trim();
-  }
-  
-  // Переходим к анализу
-  userStates.set(chatId, { 
-    step: 'adding_food',
-    data: {},
-    timestamp: Date.now()
-  });
-  
-  bot.sendMessage(chatId, 
-    `✅ *Отлично! Добавляю граммовку*\n\n` +
-    `Новое описание: *"${finalText}"*\n\n` +
-    `Анализирую...`,
-    { parse_mode: 'Markdown' }
-  );
-  
-  // Имитируем отправку
-  setTimeout(() => {
-    const fakeMsg = {
-      chat: { id: chatId },
-      from: { id: chatId },
-      text: finalText,
-      message_id: Date.now()
-    };
-    bot.emit('message', fakeMsg);
-  }, 1000);
-}
-
-// 7. Подтверждение еды
-async function handleConfirmingFood(chatId, text, data, user) {
-  const analysis = data.analysis;
-  
-  if (!analysis) {
-    userStates.set(chatId, { 
-      step: 'main_menu',
-      data: {},
-      timestamp: Date.now()
+    userData.set(chatId, user);
+    pendingCorrections.delete(chatId);
+    
+    const remaining = Math.max(0, user.dailyGoal - user.consumed);
+    const percent = Math.round((user.consumed / user.dailyGoal) * 100);
+    
+    let response = `✅ *Добавлено из поиска!*\n\n`;
+    response += `🍽️ ${analysis.foodName}\n`;
+    response += `📏 ${quantity}${unit} = ${calories} ккал\n\n`;
+    response += `📊 *Итого за день:* ${user.consumed}/${user.dailyGoal} ккал\n`;
+    response += `📉 *Осталось:* ${remaining} ккал\n`;
+    response += `📈 *Прогресс:* ${percent}%`;
+    
+    bot.sendMessage(chatId, response, {
+      parse_mode: 'Markdown',
+      reply_markup: mainKeyboard
     });
     
-    bot.sendMessage(chatId, 
-      'Извините, данные устарели. Попробуйте снова.',
-      { reply_markup: mainKeyboard }
-    );
+    userStates.set(chatId, { step: 'main_menu' });
     return;
   }
   
-  switch (text) {
-    case '✅ Да, добавить':
-      // Добавляем еду
-      user.consumed = (user.consumed || 0) + analysis.calories;
+  // ========== ИЗМЕНЕНИЕ НОРМЫ ==========
+  if (userState.step === 'changing_goal') {
+    const goal = parseInt(text);
+    
+    if (isNaN(goal) || goal < 500 || goal > 10000) {
+      bot.sendMessage(chatId, 
+        '❌ Введите число от 500 до 10000\n\n' +
+        'Пример: 1800',
+        { parse_mode: 'Markdown' }
+      );
+      return;
+    }
+    
+    user.dailyGoal = goal;
+    userData.set(chatId, user);
+    
+    bot.sendMessage(chatId, 
+      `✅ *Норма изменена: ${goal} ккал*\n\n` +
+      `Теперь продолжайте отслеживание!`,
+      { parse_mode: 'Markdown', reply_markup: mainKeyboard }
+    );
+    
+    userStates.set(chatId, { step: 'main_menu' });
+    return;
+  }
+  
+  // ========== ЕСЛИ НЕ РАСПОЗНАЛИ СОСТОЯНИЕ ==========
+  // Проверяем, есть ли ожидающие данные для уточнения
+  const pending = pendingCorrections.get(chatId);
+  if (pending && pending.analysis) {
+    // Если есть ожидающие данные, возможно пользователь вводит количество
+    const analysis = pending.analysis;
+    if (analysis.nutrition) {
+      // Это продукт из поиска
+      userStates.set(chatId, { step: 'specifying_quantity' });
+      
+      // Извлекаем количество из текста
+      let quantity = 100;
+      let unit = 'г';
+      
+      const match = text.match(/(\d+)\s*(г|грамм|мл|шт|штук|кг|литр|л)?/i);
+      if (match) {
+        quantity = parseInt(match[1]);
+        if (match[2]) {
+          unit = match[2].toLowerCase();
+        }
+      }
+      
+      if (isNaN(quantity) || quantity <= 0 || quantity > 5000) {
+        bot.sendMessage(chatId, '❌ Введите число от 1 до 5000');
+        return;
+      }
+      
+      const nutrition = analysis.nutrition;
+      const calories = Math.round((nutrition.calories * quantity) / 100);
+      
+      // Добавляем
+      user.consumed = (user.consumed || 0) + calories;
       user.foods = user.foods || [];
       user.foods.push({
         name: analysis.foodName,
-        calories: analysis.calories,
-        quantity: analysis.quantity,
-        unit: analysis.unit,
-        protein: analysis.protein || 0,
-        fat: analysis.fat || 0,
-        carbs: analysis.carbs || 0,
+        calories: calories,
+        quantity: quantity,
+        unit: unit,
+        protein: Math.round((nutrition.protein * quantity) / 100 * 10) / 10,
+        fat: Math.round((nutrition.fat * quantity) / 100 * 10) / 10,
+        carbs: Math.round((nutrition.carbs * quantity) / 100 * 10) / 10,
         time: new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }),
-        source: analysis.source,
+        source: '📚 База данных (поиск)',
         addedAt: new Date().toISOString()
       });
       
       userData.set(chatId, user);
+      pendingCorrections.delete(chatId);
       
-      // Показываем результат
       const remaining = Math.max(0, user.dailyGoal - user.consumed);
       const percent = Math.round((user.consumed / user.dailyGoal) * 100);
       
-      let response = `✅ *Добавлено!*\n\n`;
+      let response = `✅ *Добавлено из поиска!*\n\n`;
       response += `🍽️ ${analysis.foodName}\n`;
-      response += `📏 ${analysis.quantity}${analysis.unit}\n`;
-      response += `🔥 ${analysis.calories} ккал\n\n`;
+      response += `📏 ${quantity}${unit} = ${calories} ккал\n\n`;
       response += `📊 *Итого за день:* ${user.consumed}/${user.dailyGoal} ккал\n`;
       response += `📉 *Осталось:* ${remaining} ккал\n`;
       response += `📈 *Прогресс:* ${percent}%`;
-      
-      // Прогресс бар
-      const barLength = 10;
-      const filled = Math.min(barLength, Math.floor(percent / 10));
-      const bar = '🟩'.repeat(filled) + '⬜'.repeat(barLength - filled);
-      response += `\n\n${bar}`;
-      
-      userStates.set(chatId, { 
-        step: 'main_menu',
-        data: {},
-        timestamp: Date.now()
-      });
       
       bot.sendMessage(chatId, response, {
         parse_mode: 'Markdown',
         reply_markup: mainKeyboard
       });
-      break;
       
-    case '✏️ Нет, изменить калории':
-      userStates.set(chatId, { 
-        step: 'correcting_calories',
-        data: { analysis: analysis },
-        timestamp: Date.now()
-      });
-      
-      bot.sendMessage(chatId, 
-        `✍️ *Введите правильное количество калорий:*\n\n` +
-        `Для: ${analysis.foodName}\n` +
-        `Количество: ${analysis.quantity}${analysis.unit}\n\n` +
-        'Просто напишите число (например: 350)',
-        { parse_mode: 'Markdown' }
-      );
-      break;
-      
-    case '🔍 Найти в базе':
-      userStates.set(chatId, { 
-        step: 'searching_food',
-        data: {},
-        timestamp: Date.now()
-      });
-      
-      bot.sendMessage(chatId, 
-        '🔍 *Поиск продукта в базе*\n\n' +
-        'Введите название продукта для поиска:',
-        { parse_mode: 'Markdown' }
-      );
-      break;
-      
-    case '↩️ Отмена':
-      userStates.set(chatId, { 
-        step: 'main_menu',
-        data: {},
-        timestamp: Date.now()
-      });
-      
-      bot.sendMessage(chatId, 
-        'Отменено. Что делаем дальше?',
-        { reply_markup: mainKeyboard }
-      );
-      break;
-      
-    default:
-      bot.sendMessage(chatId, 
-        'Пожалуйста, выберите вариант из меню:',
-        { reply_markup: confirmFoodKeyboard }
-      );
-      break;
-  }
-}
-
-// 8. Корректировка калорий
-async function handleCorrectingCalories(chatId, text, data, user) {
-  const analysis = data.analysis;
-  
-  if (!analysis) {
-    userStates.set(chatId, { 
-      step: 'main_menu',
-      data: {},
-      timestamp: Date.now()
-    });
-    
-    bot.sendMessage(chatId, 
-      'Извините, данные устарели. Попробуйте снова.',
-      { reply_markup: mainKeyboard }
-    );
-    return;
-  }
-  
-  const calories = parseInt(text);
-  
-  if (isNaN(calories) || calories <= 0 || calories > 5000) {
-    bot.sendMessage(chatId, 
-      '❌ Введите число от 1 до 5000\n\n' +
-      'Пример: 350',
-      { parse_mode: 'Markdown' }
-    );
-    return;
-  }
-  
-  // Добавляем с исправленными калориями
-  user.consumed = (user.consumed || 0) + calories;
-  user.foods = user.foods || [];
-  user.foods.push({
-    name: analysis.foodName,
-    calories: calories,
-    quantity: analysis.quantity,
-    unit: analysis.unit,
-    protein: analysis.protein || 0,
-    fat: analysis.fat || 0,
-    carbs: analysis.carbs || 0,
-    time: new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }),
-    source: '✍️ Ручная корректировка',
-    addedAt: new Date().toISOString()
-  });
-  
-  userData.set(chatId, user);
-  
-  const remaining = Math.max(0, user.dailyGoal - user.consumed);
-  const percent = Math.round((user.consumed / user.dailyGoal) * 100);
-  
-  let response = `✅ *Добавлено с корректировкой!*\n\n`;
-  response += `🍽️ ${analysis.foodName}\n`;
-  response += `📏 ${analysis.quantity}${analysis.unit}\n`;
-  response += `🔥 ${calories} ккал\n\n`;
-  response += `📊 *Итого за день:* ${user.consumed}/${user.dailyGoal} ккал\n`;
-  response += `📉 *Осталось:* ${remaining} ккал\n`;
-  response += `📈 *Прогресс:* ${percent}%\n\n`;
-  response += `✍️ *Калории указаны вручную*`;
-  
-  userStates.set(chatId, { 
-    step: 'main_menu',
-    data: {},
-    timestamp: Date.now()
-  });
-  
-  bot.sendMessage(chatId, response, {
-    parse_mode: 'Markdown',
-    reply_markup: mainKeyboard
-  });
-}
-
-// 9. Поиск продукта в базе
-async function handleSearchingFood(chatId, text) {
-  const searchResult = findProductInDatabaseEnhanced(text);
-  
-  if (searchResult) {
-    const { productName, nutrition } = searchResult;
-    
-    let response = `🔍 *Найдено в базе:*\n\n`;
-    response += `🍽️ *${productName}*\n`;
-    response += `📊 ${nutrition.calories} ккал/100г\n`;
-    
-    if (nutrition.protein || nutrition.fat || nutrition.carbs) {
-      response += `🥩 Белки: ${nutrition.protein || 0}г\n`;
-      response += `🥑 Жиры: ${nutrition.fat || 0}г\n`;
-      response += `🍚 Углеводы: ${nutrition.carbs || 0}г\n\n`;
+      userStates.set(chatId, { step: 'main_menu' });
+      return;
     }
-    
-    response += `*Хотите добавить этот продукт?*`;
-    
-    // Сохраняем найденный продукт
-    userStates.set(chatId, { 
-      step: 'confirming_search',
-      data: { 
-        productName: productName,
-        nutrition: nutrition,
-        searchMethod: searchResult.method
-      },
-      timestamp: Date.now()
-    });
-    
-    const searchKeyboard = {
-      keyboard: [
-        ['✅ Да, добавить 100г', '✏️ Указать количество'],
-        ['🔍 Новый поиск', '↩️ Назад']
-      ],
-      resize_keyboard: true,
-      one_time_keyboard: true
-    };
-    
-    bot.sendMessage(chatId, response, {
-      parse_mode: 'Markdown',
-      reply_markup: searchKeyboard
-    });
-  } else {
-    userStates.set(chatId, { 
-      step: 'searching_food',
-      data: {},
-      timestamp: Date.now()
-    });
-    
-    bot.sendMessage(chatId, 
-      `❌ *"${text}" не найден в базе*\n\n` +
-      `Попробуйте:\n` +
-      `• Другое название\n` +
-      `• Более общее название\n` +
-      `• Или добавьте вручную через меню`,
-      { 
-        parse_mode: 'Markdown',
-        reply_markup: {
-          keyboard: [
-            ['🔍 Новый поиск', '↩️ Назад к добавлению']
-          ],
-          resize_keyboard: true,
-          one_time_keyboard: true
-        }
-      }
-    );
   }
-}
-
-// 10. Подтверждение найденного продукта
-async function handleConfirmingSearch(chatId, text, data, user) {
-  const { productName, nutrition } = data;
   
-  if (!productName || !nutrition) {
-    userStates.set(chatId, { 
-      step: 'main_menu',
-      data: {},
-      timestamp: Date.now()
-    });
-    
+  // Предлагаем начать с установки нормы
+  if (!user.dailyGoal) {
+    userStates.set(chatId, { step: 'waiting_for_goal' });
     bot.sendMessage(chatId, 
-      'Извините, данные устарели. Попробуйте снова.',
+      '🎯 *Сначала установите дневную норму калорий:*\n\n' +
+      'Выберите вариант или введите свою норму:',
+      { parse_mode: 'Markdown', reply_markup: goalKeyboard }
+    );
+  } else {
+    // Возвращаем в главное меню
+    userStates.set(chatId, { step: 'main_menu' });
+    bot.sendMessage(chatId, 
+      'Что вы хотите сделать?',
       { reply_markup: mainKeyboard }
     );
-    return;
   }
-  
-  switch (text) {
-    case '✅ Да, добавить 100г':
-      // Добавляем со стандартным количеством 100г
-      const calories = nutrition.calories;
-      
-      user.consumed = (user.consumed || 0) + calories;
-      user.foods = user.foods || [];
-      user.foods.push
+});
 
 // ========== KEEP ALIVE СИСТЕМА ==========
 function startKeepAlive() {
