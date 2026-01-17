@@ -1132,7 +1132,7 @@ function levenshteinDistance(a, b) {
 
 // ========== ОСТАЛЬНОЙ КОД БОТА (аналогично предыдущей версии) ==========
 
-const pendingCorrections = new Map();
+
 
 // Express сервер
 const app = express();
