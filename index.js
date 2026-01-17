@@ -2015,7 +2015,7 @@ bot.on('message', async (msg) => {
     bot.sendMessage(chatId, 
       '🎯 *Сначала установите дневную норму калорий:*\n\n' +
       'Выберите вариант или введите свою норму:',
-      { parse_mode: 'Markdown', reply_markup: goalKeyboard }
+      { parse_mode: 'Markdown', reply_markup: mainKeyboard }
     );
   } else {
     // Возвращаем в главное меню
