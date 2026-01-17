@@ -1168,8 +1168,7 @@ app.get('/', (req, res) => {
 // Хранилище состояний пользователей
 const userStates = new Map();
 
-// Хранилище временных данных для уточнения
-const pendingCorrections = new Map(); // Добавьте эту строку, если её нет
+
 
 // Основная клавиатура
 const mainKeyboard = {
