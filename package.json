@@ -1,7 +1,7 @@
 {
   "name": "calorie-counter-bot",
   "version": "1.0.0",
-  "description": "Telegram bot for calorie counting",
+  "description": "Telegram bot for calorie counting with AI",
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
@@ -10,7 +10,11 @@
   "dependencies": {
     "express": "^4.18.2",
     "node-telegram-bot-api": "^0.64.0",
+    "openai": "^4.20.1",
     "dotenv": "^16.3.1"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.1"
   },
   "engines": {
     "node": ">=16.0.0"
