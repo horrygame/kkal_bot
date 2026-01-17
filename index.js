@@ -2718,5 +2718,4 @@ process.on('SIGTERM', () => {
   });
 });
 
-// Экспорт для Render
-export { app, bot };
+
