@@ -1331,6 +1331,28 @@ bot.onText(/\/list/, (msg) => {
   showProductsList(chatId);
 });
 
+function logMessage(msg) {
+  const timestamp = new Date().toISOString();
+  const chatId = msg.chat.id;
+  const userName = msg.from.first_name || 'Неизвестный';
+  const text = msg.text || '(без текста)';
+  const messageType = msg.photo ? 'ФОТО' : 
+                     msg.document ? 'ДОКУМЕНТ' : 
+                     msg.location ? 'МЕСТОПОЛОЖЕНИЕ' : 
+                     'ТЕКСТ';
+  
+  console.log(`📨 [${timestamp}]`);
+  console.log(`👤 Пользователь: ${userName} (ID: ${chatId})`);
+  console.log(`📝 Тип: ${messageType}`);
+  console.log(`💬 Сообщение: "${text}"`);
+  console.log(`📊 Данные:`, JSON.stringify(msg, null, 2).substring(0, 500) + '...');
+  console.log('─'.repeat(50));
+}
+
+// Затем в обработчике сообщений добавьте вызов этой функции в самом начале:
+bot.on('message', async (msg) => {
+  // Логируем ВСЕ сообщения
+  logMessage(msg);
 // ========== ОБРАБОТКА СООБЩЕНИЙ ==========
 bot.on('message', async (msg) => {
   const chatId = msg.chat.id;
