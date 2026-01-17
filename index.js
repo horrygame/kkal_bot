@@ -923,6 +923,7 @@ const foodDatabase = {
 };
 };
 };
+};
 
 console.log(`📊 Загружено продуктов: ${Object.keys(foodDatabase).length}`);
 
