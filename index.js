@@ -2661,6 +2661,32 @@ bot.onText(/\/reset/, (msg) => {
   );
 });
 
+bot.onText(/\/goal/, (msg) => {
+  const chatId = msg.chat.id;
+  const user = userData.get(chatId) || {};
+  
+  if (user.dailyGoal) {
+    bot.sendMessage(chatId, 
+      `🎯 *Текущая дневная норма:* ${user.dailyGoal} ккал\n\n` +
+      `🍽️ *Съедено сегодня:* ${user.consumed || 0} ккал\n` +
+      `📉 *Осталось:* ${Math.max(0, user.dailyGoal - (user.consumed || 0))} ккал\n\n` +
+      `Используйте меню "🎯 Изменить норму" для изменения`,
+      { parse_mode: 'Markdown', reply_markup: mainKeyboard }
+    );
+  } else {
+    bot.sendMessage(chatId, 
+      '❌ *Норма калорий не установлена!*\n\n' +
+      'Используйте /start для настройки бота',
+      { parse_mode: 'Markdown' }
+    );
+  }
+});
+
+bot.onText(/\/list/, (msg) => {
+  const chatId = msg.chat.id;
+  showProductsList(chatId);
+});
+
 // ========== ЗАПУСК СЕРВЕРА ==========
 const server = app.listen(port, () => {
   console.log(`
@@ -2691,3 +2717,6 @@ process.on('SIGTERM', () => {
     process.exit(0);
   });
 });
+
+// Экспорт для Render
+export { app, bot };
