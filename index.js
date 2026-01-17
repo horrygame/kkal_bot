@@ -661,8 +661,6 @@ const foodDatabase = {
   'семена конопли': { calories: 553, protein: 31, fat: 48, carbs: 9 },
   'ореховая паста': { calories: 588, protein: 25, fat: 50, carbs: 20 },
   'урбеч из семян': { calories: 534, protein: 18, fat: 45, carbs: 25 },
-  
-
 
   'бургер': { calories: 534, protein: 18, fat: 45, carbs: 25 },
   'пицца Маргарита': { calories: 285, protein: 12, fat: 11, carbs: 35 },
@@ -920,7 +918,6 @@ const foodDatabase = {
   'крем масляный': { calories: 450, protein: 0.5, fat: 40, carbs: 25 },
   'глазурь шоколадная': { calories: 400, protein: 3, fat: 15, carbs: 65 },
   'помадка': { calories: 373, protein: 0.1, fat: 0.1, carbs: 93 }
-};
 };
 
 
