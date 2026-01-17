@@ -978,7 +978,6 @@ const foodDatabase = {
   'мате (без сахара)': { calories: 2, protein: 0, fat: 0, carbs: 0.3 }
 };
 
-
 console.log(`📊 Загружено продуктов: ${Object.keys(foodDatabase).length}`);
 
 // ========== ПОМОЩНИКИ ПОИСКА ==========
@@ -1331,6 +1330,7 @@ bot.onText(/\/list/, (msg) => {
   showProductsList(chatId);
 });
 
+
 function logMessage(msg) {
   const timestamp = new Date().toISOString();
   const chatId = msg.chat.id;
@@ -1348,13 +1348,11 @@ function logMessage(msg) {
   console.log(`📊 Данные:`, JSON.stringify(msg, null, 2).substring(0, 500) + '...');
   console.log('─'.repeat(50));
 }
-
-// Затем в обработчике сообщений добавьте вызов этой функции в самом начале:
-bot.on('message', async (msg) => {
-  // Логируем ВСЕ сообщения
-  logMessage(msg);
 // ========== ОБРАБОТКА СООБЩЕНИЙ ==========
 bot.on('message', async (msg) => {
+
+  // Логируем ВСЕ сообщения
+  logMessage(msg);
   const chatId = msg.chat.id;
   const text = msg.text;
   const userName = msg.from.first_name;
@@ -2314,5 +2312,4 @@ process.on('unhandledRejection', (error) => {
 
 process.on('uncaughtException', (error) => {
   console.error('❌ Uncaught Exception:', error);
-});
 });
