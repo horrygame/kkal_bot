@@ -1,0 +1,18 @@
+services:
+  - type: web
+    name: calorie-bot
+    env: node
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+        optional: true
+      - key: PORT
+        value: 3000
+    healthCheckPath: /health
+    autoDeploy: true
